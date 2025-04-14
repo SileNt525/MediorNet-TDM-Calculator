@@ -1,0 +1,42 @@
+[
+    {
+        "id": 1,
+        "name": "UHD - 1",
+        "type": "MicroN UHD",
+        "mpo_ports": 2,
+        "lc_ports": 2,
+        "sfp_ports": 0
+    },
+    {
+        "id": 2,
+        "name": "UHD - 2",
+        "type": "MicroN UHD",
+        "mpo_ports": 2,
+        "lc_ports": 2,
+        "sfp_ports": 0
+    },
+    {
+        "id": 3,
+        "name": "UHD - 3",
+        "type": "MicroN UHD",
+        "mpo_ports": 2,
+        "lc_ports": 2,
+        "sfp_ports": 0
+    },
+    {
+        "id": 4,
+        "name": "UHD - 4",
+        "type": "MicroN UHD",
+        "mpo_ports": 2,
+        "lc_ports": 2,
+        "sfp_ports": 0
+    },
+    {
+        "id": 5,
+        "name": "UHD - 5",
+        "type": "MicroN UHD",
+        "mpo_ports": 2,
+        "lc_ports": 2,
+        "sfp_ports": 0
+    }
+]
