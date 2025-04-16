@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V39
+# MediorNet TDM 连接计算器 V40
 # 主要变更:
-# - 在 V38 的基础上，为 QSS 添加了微妙的灰色边框，以解决 macOS 下边框消失的问题。
-# - 目标是在不同系统主题下提供基本的视觉结构。
-# - 保留 V38 的其他功能。
+# - 新增“导出报告 (HTML)”功能，将拓扑图和连接列表合并到一个美观的 HTML 文件中。
+# - 使用 Base64 嵌入拓扑图，使用 Tailwind CSS 美化报告样式。
+# - 保留 V39 的功能。
 
 import sys
 import tkinter as tk
@@ -19,6 +19,10 @@ import platform
 import copy
 import json
 from collections import defaultdict
+# --- 新增导入 ---
+import io
+import base64
+# --- 结束新增导入 ---
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -30,7 +34,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot, Qt
 from PySide6.QtGui import QFont
 
-# --- QSS 样式定义 (V39: 重新添加微妙边框) ---
+# --- QSS 样式定义 (与 V39 相同) ---
 APP_STYLE = """
 QMainWindow, QDialog, QMessageBox {
     /* background-color: #f0f0f0; */ /* Removed */
@@ -128,9 +132,7 @@ QTabBar::tab {
 QTabBar::tab:selected {
     /* background: white; */ /* Removed */
     margin-bottom: -1px;
-    /* border-bottom-color: transparent; */ /* Try to make bottom border disappear */
-    /* A common trick is to set background matching the pane, but we removed pane bg */
-    /* Let's keep the border but maybe change color slightly if needed */
+    /* border-bottom-color: transparent; */
 }
 QTabBar::tab:!selected:hover {
     /* background: #cacaca; */ /* Removed */
@@ -152,7 +154,7 @@ QSplitter::handle:hover {
 }
 """
 
-# --- 用于数字排序的 QTableWidgetItem 子类 (与 V38 相同) ---
+# --- 用于数字排序的 QTableWidgetItem 子类 (与 V39 相同) ---
 class NumericTableWidgetItem(QTableWidgetItem):
     """自定义 QTableWidgetItem 以支持数字排序。"""
     def __lt__(self, other):
@@ -165,7 +167,7 @@ class NumericTableWidgetItem(QTableWidgetItem):
         except (TypeError, ValueError):
             return super().__lt__(other)
 
-# --- 数据结构 (与 V38 相同) ---
+# --- 数据结构 (与 V39 相同) ---
 class Device:
     """代表一个 MediorNet 设备"""
     def __init__(self, id, name, type, mpo_ports=0, lc_ports=0, sfp_ports=0):
@@ -263,7 +265,7 @@ class Device:
     def __repr__(self):
         return f"{self.name} ({self.type})"
 
-# --- 连接计算逻辑 (与 V38 相同) ---
+# --- 连接计算逻辑 (与 V39 相同) ---
 
 # 辅助函数
 def _find_best_single_link(dev1_copy, dev2_copy):
@@ -413,7 +415,7 @@ def _fill_connections_ring_style(devices_current_state):
 # --- 结束连接计算逻辑 ---
 
 
-# --- Matplotlib Canvas Widget (与 V37 相同) ---
+# --- Matplotlib Canvas Widget (与 V38 相同) ---
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
@@ -528,11 +530,11 @@ def find_chinese_font():
     print("警告: 未找到特定中文字体。")
     return None
 
-# --- 主窗口 (与 V37 相同) ---
+# --- 主窗口 (与 V38 相同) ---
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V39 (PySide6)") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器 V40 (PySide6)") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
@@ -547,7 +549,7 @@ class MainWindow(QMainWindow):
         elif os_system == "Darwin": font_families.append("PingFang SC")
         font_families.extend(["Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])
         self.chinese_font = QFont(); self.chinese_font.setFamilies(font_families); self.chinese_font.setPointSize(10)
-        # --- 主布局与控件 (与 V38 相同) ---
+        # --- 主布局与控件 ---
         main_widget = QWidget(); self.setCentralWidget(main_widget); main_layout = QHBoxLayout(main_widget)
         main_splitter = QSplitter(Qt.Orientation.Horizontal); main_layout.addWidget(main_splitter)
         left_panel = QFrame(); left_panel.setFrameShape(QFrame.Shape.StyledPanel);
@@ -571,9 +573,17 @@ class MainWindow(QMainWindow):
         self.device_tablewidget.itemDoubleClicked.connect(self.show_device_details_from_table); list_group_layout.addWidget(self.device_tablewidget)
         device_op_layout = QHBoxLayout(); self.remove_button = QPushButton("移除选中"); self.remove_button.setFont(self.chinese_font); self.remove_button.clicked.connect(self.remove_device); self.clear_button = QPushButton("清空所有"); self.clear_button.setFont(self.chinese_font); self.clear_button.clicked.connect(self.clear_all_devices); device_op_layout.addWidget(self.remove_button); device_op_layout.addWidget(self.clear_button); list_group_layout.addLayout(device_op_layout)
         left_layout.addWidget(list_group)
+        # --- 文件操作区域：添加导出报告按钮 ---
         file_group = QFrame(); file_group.setObjectName("fileGroup"); file_group_layout = QGridLayout(file_group); file_group_layout.setContentsMargins(10, 15, 10, 10); file_title = QLabel("<b>文件操作</b>"); file_title.setFont(QFont(self.chinese_font.family(), 11)); file_group_layout.addWidget(file_title, 0, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
         self.save_button = QPushButton("保存配置"); self.save_button.setFont(self.chinese_font); self.save_button.clicked.connect(self.save_config); self.load_button = QPushButton("加载配置"); self.load_button.setFont(self.chinese_font); self.load_button.clicked.connect(self.load_config); file_group_layout.addWidget(self.save_button, 1, 0); file_group_layout.addWidget(self.load_button, 1, 1)
-        self.export_list_button = QPushButton("导出列表"); self.export_list_button.setFont(self.chinese_font); self.export_list_button.clicked.connect(self.export_connections); self.export_list_button.setEnabled(False); self.export_topo_button = QPushButton("导出拓扑图"); self.export_topo_button.setFont(self.chinese_font); self.export_topo_button.clicked.connect(self.export_topology); self.export_topo_button.setEnabled(False); file_group_layout.addWidget(self.export_list_button, 2, 0); file_group_layout.addWidget(self.export_topo_button, 2, 1)
+        self.export_list_button = QPushButton("导出列表"); self.export_list_button.setFont(self.chinese_font); self.export_list_button.clicked.connect(self.export_connections); self.export_list_button.setEnabled(False); file_group_layout.addWidget(self.export_list_button, 2, 0)
+        self.export_topo_button = QPushButton("导出拓扑图"); self.export_topo_button.setFont(self.chinese_font); self.export_topo_button.clicked.connect(self.export_topology); self.export_topo_button.setEnabled(False); file_group_layout.addWidget(self.export_topo_button, 2, 1)
+        self.export_report_button = QPushButton("导出报告 (HTML)"); # <-- 新增按钮
+        self.export_report_button.setFont(self.chinese_font)
+        self.export_report_button.clicked.connect(self.export_html_report) # <-- 连接信号
+        self.export_report_button.setEnabled(False) # <-- 初始禁用
+        file_group_layout.addWidget(self.export_report_button, 3, 0, 1, 2) # <-- 添加到布局，跨两列
+        # --- 结束文件操作区域修改 ---
         left_layout.addWidget(file_group); left_layout.addStretch()
         right_panel = QFrame(); right_panel.setFrameShape(QFrame.Shape.StyledPanel)
         right_layout = QVBoxLayout(right_panel); main_splitter.addWidget(right_panel)
@@ -621,7 +631,7 @@ class MainWindow(QMainWindow):
         main_splitter.setStretchFactor(1, 1)
         self.update_port_entries()
 
-    # --- 方法 (与 V38 相同) ---
+    # --- 方法 (大部分与 V39 相同) ---
     @Slot()
     def update_port_entries(self):
         selected_type = self.device_type_combo.currentText()
@@ -710,7 +720,10 @@ class MainWindow(QMainWindow):
         self.connections_result = []; self.fig = None; self.node_positions = None; self.selected_node_id = None
         self.connections_textedit.clear(); self.manual_connection_list.clear()
         self.mpl_canvas.axes.cla(); self.mpl_canvas.axes.text(0.5, 0.5, '点击“计算”生成图形', ha='center', va='center'); self.mpl_canvas.draw()
-        self.export_list_button.setEnabled(False); self.export_topo_button.setEnabled(False); self.remove_manual_button.setEnabled(False)
+        self.export_list_button.setEnabled(False)
+        self.export_topo_button.setEnabled(False)
+        self.export_report_button.setEnabled(False) # <-- 更新：禁用报告按钮
+        self.remove_manual_button.setEnabled(False)
         self.fill_mesh_button.setEnabled(False); self.fill_ring_button.setEnabled(False)
         for dev in self.devices: dev.reset_ports()
         self._update_device_table_connections()
@@ -798,7 +811,13 @@ class MainWindow(QMainWindow):
         if calculated_pos is not None and self.dragged_node_id is None:
              if self.node_positions is None:
                  self.node_positions = calculated_pos
-        self.export_topo_button.setEnabled(bool(self.fig))
+        # --- 更新：导出按钮状态 ---
+        has_results = bool(self.connections_result)
+        has_figure = self.fig is not None # 检查 figure 是否已生成
+        self.export_list_button.setEnabled(has_results)
+        self.export_topo_button.setEnabled(has_figure)
+        self.export_report_button.setEnabled(has_results and has_figure) # 报告需要两者都有
+        # --- 结束更新 ---
 
     def _update_device_table_connections(self):
         """更新设备表格中的连接数估算列，并设置数字排序"""
@@ -983,9 +1002,137 @@ class MainWindow(QMainWindow):
         filepath, selected_filter = QFileDialog.getSaveFileName(self, "导出拓扑图", "", "PNG 图像 (*.png);;PDF 文件 (*.pdf);;SVG 文件 (*.svg);;所有文件 (*)")
         if not filepath: return
         try:
+            # 提高导出分辨率
             self.fig.savefig(filepath, dpi=300, bbox_inches='tight')
             QMessageBox.information(self, "成功", f"拓扑图已导出到:\n{filepath}")
         except Exception as e: QMessageBox.critical(self, "导出失败", f"无法导出拓扑图:\n{e}")
+
+    # --- 新增：导出 HTML 报告的槽函数 ---
+    @Slot()
+    def export_html_report(self):
+        """导出包含拓扑图和连接列表的 HTML 报告"""
+        if not self.connections_result or not self.mpl_canvas.fig:
+            QMessageBox.warning(self, "无法导出", "请先计算连接并生成拓扑图。")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出 HTML 报告",
+            "", # 默认目录
+            "HTML 文件 (*.html);;所有文件 (*)" # 文件过滤器
+        )
+        if not filepath: # 如果用户取消
+            return
+
+        try:
+            # 1. 将 Matplotlib 图形保存到内存中的 PNG
+            buffer = io.BytesIO()
+            # 使用稍高的 DPI 导出，并确保紧凑边界框
+            self.mpl_canvas.fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+            buffer.seek(0)
+            # 2. 将 PNG 图像编码为 Base64 字符串
+            image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            img_data_uri = f"data:image/png;base64,{image_base64}"
+
+            # 3. 准备连接列表 HTML (使用表格)
+            connections_html = """
+            <div class="mt-8">
+                <h2 class="text-lg font-semibold mb-3">连接列表</h2>
+                <div class="overflow-x-auto bg-white rounded-lg shadow">
+                    <table class="min-w-full leading-normal">
+                        <thead>
+                            <tr>
+                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">序号</th>
+                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 1</th>
+                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 1</th>
+                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 2</th>
+                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 2</th>
+                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">类型</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            """
+            if self.connections_result:
+                for i, conn in enumerate(self.connections_result):
+                    dev1, port1, dev2, port2, conn_type = conn
+                    # 添加斑马条纹效果
+                    bg_class = "bg-white" if i % 2 == 0 else "bg-gray-50"
+                    connections_html += f"""
+                            <tr class="{bg_class}">
+                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{i+1}</td>
+                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev1.name} ({dev1.type})</td>
+                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{port1}</td>
+                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev2.name} ({dev2.type})</td>
+                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{port2}</td>
+                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{conn_type}</td>
+                            </tr>
+                    """
+            else:
+                connections_html += """
+                            <tr>
+                                <td colspan="6" class="px-5 py-5 border-b border-gray-200 bg-white text-center text-sm text-gray-500">无连接</td>
+                            </tr>
+                """
+            connections_html += """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            """
+
+            # 4. 生成完整的 HTML 结构
+            html_content = f"""
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediorNet 连接报告</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }}
+        /* 增加打印样式，确保背景色和边框在打印时可见 */
+        @media print {{
+            body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+            .bg-gray-100 {{ background-color: #f7fafc !important; }}
+            .bg-gray-50 {{ background-color: #f9fafb !important; }}
+            .border-b-2 {{ border-bottom-width: 2px !important; }}
+            .border-gray-200 {{ border-color: #edf2f7 !important; }}
+            .shadow {{ box-shadow: none !important; }}
+        }}
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-6 md:p-10 bg-white rounded-lg shadow-xl my-10 max-w-4xl">
+        <h1 class="text-2xl font-bold text-center mb-8 text-gray-700">MediorNet 连接报告</h1>
+
+        <div class="mb-8">
+            <h2 class="text-lg font-semibold mb-3 text-gray-600">网络连接拓扑图</h2>
+            <div class="flex justify-center p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-inner">
+                 <img src="{img_data_uri}" alt="网络拓扑图" style="max-width: 100%; height: auto;" class="rounded">
+            </div>
+        </div>
+
+        {connections_html}
+
+        <div class="text-center text-xs text-gray-400 mt-10">
+            报告生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        </div>
+    </div>
+</body>
+</html>
+            """
+
+            # 5. 写入文件
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+
+            QMessageBox.information(self, "导出成功", f"HTML 报告已成功导出到:\n{filepath}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"导出 HTML 报告时发生错误:\n{e}")
+            print(f"导出 HTML 报告错误: {e}")
+    # --- 结束新增槽函数 ---
 
     @Slot(str)
     def filter_device_table(self, text):
@@ -1088,8 +1235,11 @@ class MainWindow(QMainWindow):
             self.mpl_canvas.draw_idle()
     # --- 结束事件处理 ---
 
-# --- 程序入口 (与 V38 相同) ---
+# --- 程序入口 (与 V39 相同) ---
 if __name__ == "__main__":
+    # --- 新增：导入 datetime ---
+    import datetime
+    # --- 结束新增导入 ---
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLE)
     window = MainWindow()
