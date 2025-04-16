@@ -1,0 +1,56 @@
+# .github/workflows/build-windows.yml
+
+name: Build Windows Executable
+
+# 控制工作流触发的时机
+on:
+  push:
+    branches: [ main ]  # 当代码推送到 main 分支时触发
+    tags:
+      - 'v*' # 当创建 v 开头的标签时触发 (适合发布版本)
+  workflow_dispatch:      # 允许手动从 GitHub Actions 页面触发
+
+jobs:
+  build:
+    # 指定运行环境为最新的 Windows
+    runs-on: windows-latest
+
+    steps:
+      # 第一步：签出代码
+      # 获取你的仓库代码到 Actions 运行器中
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 第二步：设置 Python 环境
+      # 安装指定版本的 Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 替换为您项目使用的 Python 版本
+
+      # 第三步：安装依赖
+      # 安装 requirements.txt 中列出的库和 PyInstaller
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if (Test-Path requirements.txt) { pip install -r requirements.txt } else { Write-Host "requirements.txt not found." }
+          pip install pyinstaller
+
+      # 第四步：运行 PyInstaller
+      # 执行打包命令，生成单个 exe 文件
+      # 注意：--add-data 的路径分隔符在 Windows 上是 ';'
+      # 注意：PowerShell (默认 shell) 的换行符是 '`'
+      - name: Run PyInstaller (One-File)
+        run: |
+          pyinstaller TDMC.py `
+            --name MediorNetCalculator `
+            --onefile `
+            --windowed
+
+      # 第五步：上传构建产物
+      # 将 dist 文件夹中生成的 exe 文件作为 "artifact" 上传
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediorNetCalculator-Windows-exe # 上传的压缩包名称
+          path: dist/MediorNetCalculator.exe    # 要上传的 exe 文件路径
