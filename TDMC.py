@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V44
-# 主要变更:
-# - 增强错误/警告信息：在计算、填充、手动添加/拖拽连接失败时提供更具体的原因。
-# - 优化手动添加连接：端口下拉列表会根据另一侧的选择进行过滤，只显示兼容的可用端口。
-# - 保留 V43 的功能。
+# MediorNet TDM 连接计算器 V1.0.0
+# 2025-04-16
+
 
 import sys
 import tkinter as tk
@@ -517,7 +515,7 @@ def find_chinese_font():
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器v1 -- Vega Sun") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器v1 -- By Vega Sun") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
