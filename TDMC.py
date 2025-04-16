@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V38
+# MediorNet TDM 连接计算器 V39
 # 主要变更:
-# - 修改 QSS 样式，移除大部分硬编码颜色，以更好地适应系统亮色/暗色模式 (特别是 Windows 11 暗色模式)。
-# - 依赖 Qt Palette 和系统主题来确定控件颜色。
-# - 保留 V37 的节点拖动功能及其他功能。
+# - 在 V38 的基础上，为 QSS 添加了微妙的灰色边框，以解决 macOS 下边框消失的问题。
+# - 目标是在不同系统主题下提供基本的视觉结构。
+# - 保留 V38 的其他功能。
 
 import sys
 import tkinter as tk
@@ -30,67 +30,57 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot, Qt
 from PySide6.QtGui import QFont
 
-# --- QSS 样式定义 (V38: 移除硬编码颜色以适应亮/暗模式) ---
+# --- QSS 样式定义 (V39: 重新添加微妙边框) ---
 APP_STYLE = """
-/* 移除窗口/对话框的固定背景色，让系统主题控制 */
 QMainWindow, QDialog, QMessageBox {
     /* background-color: #f0f0f0; */ /* Removed */
 }
 
-/* Frame 默认透明 */
 QFrame {
     background-color: transparent;
 }
 
-/* 分组 Frame: 移除固定背景和边框色，保留边距和圆角 */
+/* 分组 Frame: 添加微妙边框 */
 QFrame#addDeviceGroup, QFrame#listGroup, QFrame#fileGroup,
 QFrame#calculateControlFrame, QFrame#addManualGroup, QFrame#removeManualGroup {
-    /* border: 1px solid #c8c8c8; */ /* Removed - Let system decide or add palette border later if needed */
+    border: 1px solid #cccccc; /* Restored subtle border */
     border-radius: 5px;
     /* background-color: #f8f8f8; */ /* Removed */
     margin-bottom: 5px;
-    /* 可以考虑添加一个基于调色板的边框来区分，如果需要的话 */
-    /* border: 1px solid palette(midlight); */
 }
 
-/* 按钮: 移除固定背景/边框/文字颜色，保留布局和圆角 */
+/* 按钮: 添加微妙边框 */
 QPushButton {
     /* background-color: #e1e1e1; */ /* Removed */
-    /* border: 1px solid #adadad; */ /* Removed - Rely on default style border */
-    border: 1px solid transparent; /* Add transparent border to maintain size consistency */
+    border: 1px solid #bbbbbb; /* Restored subtle border */
     padding: 5px 10px;
     border-radius: 4px;
     min-height: 20px;
     min-width: 75px;
 }
-/* 按钮状态: 移除固定颜色，让系统主题处理反馈 */
 QPushButton:hover {
     /* background-color: #cacaca; */ /* Removed */
-    /* border: 1px solid #999999; */ /* Removed */
-    /* 可以添加微妙的效果，如轻微边框或背景变化，但需谨慎 */
+    border: 1px solid #999999; /* Slightly darker border on hover */
 }
 QPushButton:pressed {
     /* background-color: #b0b0b0; */ /* Removed */
-    /* border: 1px solid #777777; */ /* Removed */
+    border: 1px solid #777777; /* Darker border when pressed */
 }
 QPushButton:disabled {
-    /* background-color: #d3d3d3; */ /* Removed */
-    /* color: #a0a0a0; */ /* Removed */
-    /* border: 1px solid #c0c0c0; */ /* Removed */
-    /* 完全依赖系统主题的禁用状态样式 */
+    /* Rely on system theme for disabled state */
+    border: 1px solid #dddddd; /* Subtle border for disabled */
 }
 
-/* 输入控件: 移除固定背景/边框色，保留布局和圆角 */
+/* 输入控件: 添加微妙边框 */
 QLineEdit, QComboBox, QTextEdit, QListWidget, QTableWidget {
     /* background-color: white; */ /* Removed */
-    /* border: 1px solid #c0c0c0; */ /* Removed - Rely on default style border */
+    border: 1px solid #cccccc; /* Restored subtle border */
     border-radius: 3px;
     padding: 3px;
-    /* selection-background-color: #a8cce4; */ /* Removed - Use palette highlight */
-    /* selection-color: black; */ /* Removed - Use palette highlighted-text */
+    /* Rely on system theme for selection colors */
 }
 
-/* ComboBox 下拉箭头: 保留结构样式 */
+/* ComboBox 箭头 */
 QComboBox::drop-down {
     border: none;
     background: transparent;
@@ -100,38 +90,36 @@ QComboBox::drop-down {
 QComboBox::down-arrow {
      width: 12px;
      height: 12px;
-     /* 让系统主题提供箭头图标 */
 }
 
-/* 表格: 移除固定交替背景色和网格线颜色 */
+/* 表格: 恢复网格线颜色 */
 QTableWidget {
     /* alternate-background-color: #f8f8f8; */ /* Removed */
-    /* gridline-color: #d0d0d0; */ /* Removed - Rely on default style */
-    /* 可以考虑设置 gridline-color: palette(midlight); */
+    gridline-color: #e0e0e0; /* Restored subtle gridline */
 }
 
-/* 表头: 移除固定背景色和边框色 */
+/* 表头: 恢复边框 */
 QHeaderView::section {
     /* background-color: #e8e8e8; */ /* Removed */
     padding: 4px;
-    /* border: 1px solid #d0d0d0; */ /* Removed - Rely on default style border */
-    /* border-left: none; */
+    border: 1px solid #cccccc; /* Restored subtle border */
+    border-left: none;
     font-weight: bold;
 }
-/* QHeaderView::section:first { */
-     /* border-left: 1px solid #d0d0d0; */ /* Removed */
-/* } */
+QHeaderView::section:first {
+     border-left: 1px solid #cccccc; /* Restored */
+}
 
-/* Tab 控件: 移除固定颜色 */
+/* Tab 控件: 恢复边框 */
 QTabWidget::pane {
-    /* border: 1px solid #c0c0c0; */ /* Removed */
+    border: 1px solid #cccccc; /* Restored subtle border */
     border-top: none;
     /* background-color: white; */ /* Removed */
 }
 QTabBar::tab {
     /* background: #e1e1e1; */ /* Removed */
-    /* border: 1px solid #adadad; */ /* Removed */
-    border-bottom: none;
+    border: 1px solid #cccccc; /* Restored subtle border */
+    border-bottom: none; /* To merge with pane */
     padding: 6px 12px;
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
@@ -139,16 +127,18 @@ QTabBar::tab {
 }
 QTabBar::tab:selected {
     /* background: white; */ /* Removed */
-    margin-bottom: -1px; /* 轻微上移，与边框融合 */
-    /* border-bottom: 1px solid white; */ /* Removed */
+    margin-bottom: -1px;
+    /* border-bottom-color: transparent; */ /* Try to make bottom border disappear */
+    /* A common trick is to set background matching the pane, but we removed pane bg */
+    /* Let's keep the border but maybe change color slightly if needed */
 }
 QTabBar::tab:!selected:hover {
     /* background: #cacaca; */ /* Removed */
 }
 
-/* 分隔条: 移除固定颜色 */
+/* 分隔条: 恢复背景色以确保可见 */
 QSplitter::handle {
-    /* background-color: #d0d0d0; */ /* Removed */
+    background-color: #e0e0e0; /* Restored subtle background */
     border: none;
 }
 QSplitter::handle:horizontal {
@@ -158,11 +148,11 @@ QSplitter::handle:vertical {
     height: 3px;
 }
 QSplitter::handle:hover {
-    /* background-color: #b0b0b0; */ /* Removed */
+    background-color: #d0d0d0; /* Slightly darker on hover */
 }
 """
 
-# --- 用于数字排序的 QTableWidgetItem 子类 (与 V37 相同) ---
+# --- 用于数字排序的 QTableWidgetItem 子类 (与 V38 相同) ---
 class NumericTableWidgetItem(QTableWidgetItem):
     """自定义 QTableWidgetItem 以支持数字排序。"""
     def __lt__(self, other):
@@ -175,7 +165,7 @@ class NumericTableWidgetItem(QTableWidgetItem):
         except (TypeError, ValueError):
             return super().__lt__(other)
 
-# --- 数据结构 (与 V37 相同) ---
+# --- 数据结构 (与 V38 相同) ---
 class Device:
     """代表一个 MediorNet 设备"""
     def __init__(self, id, name, type, mpo_ports=0, lc_ports=0, sfp_ports=0):
@@ -273,7 +263,7 @@ class Device:
     def __repr__(self):
         return f"{self.name} ({self.type})"
 
-# --- 连接计算逻辑 (与 V37 相同) ---
+# --- 连接计算逻辑 (与 V38 相同) ---
 
 # 辅助函数
 def _find_best_single_link(dev1_copy, dev2_copy):
@@ -521,7 +511,7 @@ class MplCanvas(FigureCanvas):
         return self.fig, pos
 # --- 结束 Matplotlib Canvas ---
 
-# --- 辅助函数 (查找字体，与 V36 相同) ---
+# --- 辅助函数 (查找字体，与 V37 相同) ---
 def find_chinese_font():
     font_names = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Heiti SC', 'STHeiti', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'sans-serif']
     font_paths = font_manager.findSystemFonts(fontpaths=None, fontext='ttf')
@@ -542,7 +532,7 @@ def find_chinese_font():
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V38 (PySide6)") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器 V39 (PySide6)") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
@@ -557,7 +547,7 @@ class MainWindow(QMainWindow):
         elif os_system == "Darwin": font_families.append("PingFang SC")
         font_families.extend(["Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])
         self.chinese_font = QFont(); self.chinese_font.setFamilies(font_families); self.chinese_font.setPointSize(10)
-        # --- 主布局与控件 (与 V37 相同) ---
+        # --- 主布局与控件 (与 V38 相同) ---
         main_widget = QWidget(); self.setCentralWidget(main_widget); main_layout = QHBoxLayout(main_widget)
         main_splitter = QSplitter(Qt.Orientation.Horizontal); main_layout.addWidget(main_splitter)
         left_panel = QFrame(); left_panel.setFrameShape(QFrame.Shape.StyledPanel);
@@ -631,7 +621,7 @@ class MainWindow(QMainWindow):
         main_splitter.setStretchFactor(1, 1)
         self.update_port_entries()
 
-    # --- 方法 (与 V37 相同) ---
+    # --- 方法 (与 V38 相同) ---
     @Slot()
     def update_port_entries(self):
         selected_type = self.device_type_combo.currentText()
@@ -799,23 +789,15 @@ class MainWindow(QMainWindow):
         else: self.remove_manual_button.setEnabled(False)
         self.filter_connection_list()
         selected_layout = self.layout_combo.currentText().lower()
-        # 传递 node_positions 和 selected_node_id
-        # plot_topology 会使用 self.node_positions (如果非 None)
-        # 拖动时，self.node_positions 会被 on_canvas_motion 更新
         self.fig, calculated_pos = self.mpl_canvas.plot_topology(
             self.devices, self.connections_result,
             layout_algorithm=selected_layout,
-            fixed_pos=self.node_positions, # 传递当前位置字典
+            fixed_pos=self.node_positions,
             selected_node_id=self.selected_node_id
         )
-        # 只有在布局是新计算出来的时候才更新存储的位置
-        # 拖动过程中不应该重置 self.node_positions
-        if calculated_pos is not None and self.dragged_node_id is None: # 仅在非拖动状态下，如果布局被计算了，才可能更新
-             if self.node_positions is None: # 如果之前没有位置信息，则采纳新计算的
+        if calculated_pos is not None and self.dragged_node_id is None:
+             if self.node_positions is None:
                  self.node_positions = calculated_pos
-             # 如果之前有位置信息，但布局算法改变导致重新计算，则采纳新计算的
-             # (on_layout_change 已经将 self.node_positions 设为 None)
-
         self.export_topo_button.setEnabled(bool(self.fig))
 
     def _update_device_table_connections(self):
@@ -1035,7 +1017,6 @@ class MainWindow(QMainWindow):
             if filter_device_text: device_match = (filter_device_text in dev1_name_lower or filter_device_text in dev2_name_lower)
             item.setHidden(not (type_match and device_match))
 
-    # --- 画布事件处理 (包含拖动逻辑) ---
     @Slot(object)
     def on_canvas_press(self, event):
         """处理画布上的鼠标按下事件 (单击, 双击, 开始拖动)"""
@@ -1096,25 +1077,21 @@ class MainWindow(QMainWindow):
         new_x = x - self.drag_offset[0]
         new_y = y - self.drag_offset[1]
         self.node_positions[self.dragged_node_id] = (new_x, new_y)
-        # 更新位置后需要重绘
-        self._update_connection_views() # <--- 触发重绘
+        self._update_connection_views()
 
     @Slot(object)
     def on_canvas_release(self, event):
         """处理画布上的鼠标释放事件 (结束拖动)"""
         if event.button == 1 and self.dragged_node_id is not None:
             print(f"结束拖动节点: {self.dragged_node_id}")
-            self.dragged_node_id = None # 清除拖动状态
-            # 最终位置已更新，视图已在 motion 中触发更新
-            self.mpl_canvas.draw_idle() # 可选：确保最终状态绘制
+            self.dragged_node_id = None
+            self.mpl_canvas.draw_idle()
     # --- 结束事件处理 ---
 
-# --- 程序入口 (与 V37 相同) ---
+# --- 程序入口 (与 V38 相同) ---
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # --- 修改：应用样式表 ---
     app.setStyleSheet(APP_STYLE)
-    # --- 结束修改 ---
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
