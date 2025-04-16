@@ -10,6 +10,9 @@ on:
       - 'v*' # 当创建 v 开头的标签时触发 (适合发布版本)
   workflow_dispatch:      # 允许手动从 GitHub Actions 页面触发
 
+permissions:
+  contents: write # 需要此权限来创建 Release 和上传附件
+
 jobs:
   build:
     # 指定运行环境为最新的 Windows
@@ -54,3 +57,42 @@ jobs:
         with:
           name: MediorNetCalculator-Windows-exe # 上传的压缩包名称
           path: dist/MediorNetCalculator.exe    # 要上传的 exe 文件路径
+
+  # --- 新增：Release Job ---
+  release:
+    name: Create GitHub Release
+    # 仅当推送 v 开头的 tag 时运行
+    if: startsWith(github.ref, 'refs/tags/v')
+    # 需要等待所有 build job 成功完成
+    needs: [build-windows, build-macos-x64, build-macos-arm64]
+    runs-on: ubuntu-latest # Release 创建本身不依赖特定 OS
+
+    steps:
+      # 可选：签出代码，如果 Release Notes 需要引用代码或提交信息
+      # - name: Checkout code
+      #   uses: actions/checkout@v4
+
+      # 下载所有 build job 生成的 artifacts 到一个名为 'release-assets' 的目录
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets # 指定下载路径
+
+      # 列出下载的文件以供调试（可选）
+      - name: List downloaded files
+        run: ls -R release-assets
+
+      # 使用 softprops/action-gh-release 创建 Release 并上传文件
+      # 它会自动使用 tag 名称作为 Release 名称
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          # 指定要上传的文件，使用通配符匹配下载目录中的所有内容
+          # download-artifact@v4 会将每个 artifact 放入其名称对应的子目录中
+          files: |
+            release-assets/MediorNetCalculator-Windows-exe/MediorNetCalculator.exe
+          # 可选：自动生成 Release Notes
+          # generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 必须，用于认证
+  # --- 结束 Release Job ---
