@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V40
+# MediorNet TDM 连接计算器 V43
 # 主要变更:
-# - 新增“导出报告 (HTML)”功能，将拓扑图和连接列表合并到一个美观的 HTML 文件中。
-# - 使用 Base64 嵌入拓扑图，使用 Tailwind CSS 美化报告样式。
-# - 保留 V39 的功能。
+# - 修正了 _update_connection_views 中计算 has_figure 变量时的逻辑错误，解决了 setEnabled 的 TypeError。
+# - 保留 V42 的功能。
 
 import sys
 import tkinter as tk
@@ -11,6 +10,7 @@ from tkinter import messagebox
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
+from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import itertools
@@ -19,10 +19,9 @@ import platform
 import copy
 import json
 from collections import defaultdict
-# --- 新增导入 ---
 import io
 import base64
-# --- 结束新增导入 ---
+import datetime
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -32,129 +31,36 @@ from PySide6.QtWidgets import (
     QHeaderView, QListWidget, QSplitter
 )
 from PySide6.QtCore import Slot, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QGuiApplication
 
-# --- QSS 样式定义 (与 V39 相同) ---
+# --- QSS 样式定义 (与 V42 相同) ---
 APP_STYLE = """
-QMainWindow, QDialog, QMessageBox {
-    /* background-color: #f0f0f0; */ /* Removed */
-}
-
-QFrame {
-    background-color: transparent;
-}
-
-/* 分组 Frame: 添加微妙边框 */
+QMainWindow, QDialog, QMessageBox { }
+QFrame { background-color: transparent; }
 QFrame#addDeviceGroup, QFrame#listGroup, QFrame#fileGroup,
 QFrame#calculateControlFrame, QFrame#addManualGroup, QFrame#removeManualGroup {
-    border: 1px solid #cccccc; /* Restored subtle border */
-    border-radius: 5px;
-    /* background-color: #f8f8f8; */ /* Removed */
-    margin-bottom: 5px;
+    border: 1px solid #cccccc; border-radius: 5px; margin-bottom: 5px;
 }
-
-/* 按钮: 添加微妙边框 */
-QPushButton {
-    /* background-color: #e1e1e1; */ /* Removed */
-    border: 1px solid #bbbbbb; /* Restored subtle border */
-    padding: 5px 10px;
-    border-radius: 4px;
-    min-height: 20px;
-    min-width: 75px;
-}
-QPushButton:hover {
-    /* background-color: #cacaca; */ /* Removed */
-    border: 1px solid #999999; /* Slightly darker border on hover */
-}
-QPushButton:pressed {
-    /* background-color: #b0b0b0; */ /* Removed */
-    border: 1px solid #777777; /* Darker border when pressed */
-}
-QPushButton:disabled {
-    /* Rely on system theme for disabled state */
-    border: 1px solid #dddddd; /* Subtle border for disabled */
-}
-
-/* 输入控件: 添加微妙边框 */
-QLineEdit, QComboBox, QTextEdit, QListWidget, QTableWidget {
-    /* background-color: white; */ /* Removed */
-    border: 1px solid #cccccc; /* Restored subtle border */
-    border-radius: 3px;
-    padding: 3px;
-    /* Rely on system theme for selection colors */
-}
-
-/* ComboBox 箭头 */
-QComboBox::drop-down {
-    border: none;
-    background: transparent;
-    width: 15px;
-    padding-right: 5px;
-}
-QComboBox::down-arrow {
-     width: 12px;
-     height: 12px;
-}
-
-/* 表格: 恢复网格线颜色 */
-QTableWidget {
-    /* alternate-background-color: #f8f8f8; */ /* Removed */
-    gridline-color: #e0e0e0; /* Restored subtle gridline */
-}
-
-/* 表头: 恢复边框 */
-QHeaderView::section {
-    /* background-color: #e8e8e8; */ /* Removed */
-    padding: 4px;
-    border: 1px solid #cccccc; /* Restored subtle border */
-    border-left: none;
-    font-weight: bold;
-}
-QHeaderView::section:first {
-     border-left: 1px solid #cccccc; /* Restored */
-}
-
-/* Tab 控件: 恢复边框 */
-QTabWidget::pane {
-    border: 1px solid #cccccc; /* Restored subtle border */
-    border-top: none;
-    /* background-color: white; */ /* Removed */
-}
-QTabBar::tab {
-    /* background: #e1e1e1; */ /* Removed */
-    border: 1px solid #cccccc; /* Restored subtle border */
-    border-bottom: none; /* To merge with pane */
-    padding: 6px 12px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    margin-right: 2px;
-}
-QTabBar::tab:selected {
-    /* background: white; */ /* Removed */
-    margin-bottom: -1px;
-    /* border-bottom-color: transparent; */
-}
-QTabBar::tab:!selected:hover {
-    /* background: #cacaca; */ /* Removed */
-}
-
-/* 分隔条: 恢复背景色以确保可见 */
-QSplitter::handle {
-    background-color: #e0e0e0; /* Restored subtle background */
-    border: none;
-}
-QSplitter::handle:horizontal {
-    width: 3px;
-}
-QSplitter::handle:vertical {
-    height: 3px;
-}
-QSplitter::handle:hover {
-    background-color: #d0d0d0; /* Slightly darker on hover */
-}
+QPushButton { border: 1px solid #bbbbbb; padding: 5px 10px; border-radius: 4px; min-height: 20px; min-width: 75px; }
+QPushButton:hover { border: 1px solid #999999; }
+QPushButton:pressed { border: 1px solid #777777; }
+QPushButton:disabled { border: 1px solid #dddddd; }
+QLineEdit, QComboBox, QTextEdit, QListWidget, QTableWidget { border: 1px solid #cccccc; border-radius: 3px; padding: 3px; }
+QComboBox::drop-down { border: none; background: transparent; width: 15px; padding-right: 5px; }
+QComboBox::down-arrow { width: 12px; height: 12px; }
+QTableWidget { gridline-color: #e0e0e0; }
+QHeaderView::section { padding: 4px; border: 1px solid #cccccc; border-left: none; font-weight: bold; }
+QHeaderView::section:first { border-left: 1px solid #cccccc; }
+QTabWidget::pane { border: 1px solid #cccccc; border-top: none; }
+QTabBar::tab { border: 1px solid #cccccc; border-bottom: none; padding: 6px 12px; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
+QTabBar::tab:selected { margin-bottom: -1px; }
+QSplitter::handle { background-color: #e0e0e0; border: none; }
+QSplitter::handle:horizontal { width: 3px; }
+QSplitter::handle:vertical { height: 3px; }
+QSplitter::handle:hover { background-color: #d0d0d0; }
 """
 
-# --- 用于数字排序的 QTableWidgetItem 子类 (与 V39 相同) ---
+# --- 用于数字排序的 QTableWidgetItem 子类 (与 V42 相同) ---
 class NumericTableWidgetItem(QTableWidgetItem):
     """自定义 QTableWidgetItem 以支持数字排序。"""
     def __lt__(self, other):
@@ -167,7 +73,7 @@ class NumericTableWidgetItem(QTableWidgetItem):
         except (TypeError, ValueError):
             return super().__lt__(other)
 
-# --- 数据结构 (与 V39 相同) ---
+# --- 数据结构 (与 V42 相同) ---
 class Device:
     """代表一个 MediorNet 设备"""
     def __init__(self, id, name, type, mpo_ports=0, lc_ports=0, sfp_ports=0):
@@ -265,7 +171,7 @@ class Device:
     def __repr__(self):
         return f"{self.name} ({self.type})"
 
-# --- 连接计算逻辑 (与 V39 相同) ---
+# --- 连接计算逻辑 (与 V42 相同) ---
 
 # 辅助函数
 def _find_best_single_link(dev1_copy, dev2_copy):
@@ -415,7 +321,7 @@ def _fill_connections_ring_style(devices_current_state):
 # --- 结束连接计算逻辑 ---
 
 
-# --- Matplotlib Canvas Widget (与 V38 相同) ---
+# --- Matplotlib Canvas Widget (与 V41 相同) ---
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
@@ -513,7 +419,7 @@ class MplCanvas(FigureCanvas):
         return self.fig, pos
 # --- 结束 Matplotlib Canvas ---
 
-# --- 辅助函数 (查找字体，与 V37 相同) ---
+# --- 辅助函数 (查找字体，与 V41 相同) ---
 def find_chinese_font():
     font_names = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Heiti SC', 'STHeiti', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'sans-serif']
     font_paths = font_manager.findSystemFonts(fontpaths=None, fontext='ttf')
@@ -530,11 +436,11 @@ def find_chinese_font():
     print("警告: 未找到特定中文字体。")
     return None
 
-# --- 主窗口 (与 V38 相同) ---
+# --- 主窗口 ---
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V40 (PySide6)") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器 V43 (PySide6)") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
@@ -544,12 +450,14 @@ class MainWindow(QMainWindow):
         self.selected_node_id = None
         self.dragged_node_id = None
         self.drag_offset = (0, 0)
+        self.connecting_node_id = None
+        self.connection_line = None
         font_families = []; os_system = platform.system()
         if os_system == "Windows": font_families.extend(["Microsoft YaHei", "SimHei"])
         elif os_system == "Darwin": font_families.append("PingFang SC")
         font_families.extend(["Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])
         self.chinese_font = QFont(); self.chinese_font.setFamilies(font_families); self.chinese_font.setPointSize(10)
-        # --- 主布局与控件 ---
+        # --- 主布局与控件 (与 V42 相同) ---
         main_widget = QWidget(); self.setCentralWidget(main_widget); main_layout = QHBoxLayout(main_widget)
         main_splitter = QSplitter(Qt.Orientation.Horizontal); main_layout.addWidget(main_splitter)
         left_panel = QFrame(); left_panel.setFrameShape(QFrame.Shape.StyledPanel);
@@ -573,17 +481,11 @@ class MainWindow(QMainWindow):
         self.device_tablewidget.itemDoubleClicked.connect(self.show_device_details_from_table); list_group_layout.addWidget(self.device_tablewidget)
         device_op_layout = QHBoxLayout(); self.remove_button = QPushButton("移除选中"); self.remove_button.setFont(self.chinese_font); self.remove_button.clicked.connect(self.remove_device); self.clear_button = QPushButton("清空所有"); self.clear_button.setFont(self.chinese_font); self.clear_button.clicked.connect(self.clear_all_devices); device_op_layout.addWidget(self.remove_button); device_op_layout.addWidget(self.clear_button); list_group_layout.addLayout(device_op_layout)
         left_layout.addWidget(list_group)
-        # --- 文件操作区域：添加导出报告按钮 ---
         file_group = QFrame(); file_group.setObjectName("fileGroup"); file_group_layout = QGridLayout(file_group); file_group_layout.setContentsMargins(10, 15, 10, 10); file_title = QLabel("<b>文件操作</b>"); file_title.setFont(QFont(self.chinese_font.family(), 11)); file_group_layout.addWidget(file_title, 0, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
         self.save_button = QPushButton("保存配置"); self.save_button.setFont(self.chinese_font); self.save_button.clicked.connect(self.save_config); self.load_button = QPushButton("加载配置"); self.load_button.setFont(self.chinese_font); self.load_button.clicked.connect(self.load_config); file_group_layout.addWidget(self.save_button, 1, 0); file_group_layout.addWidget(self.load_button, 1, 1)
         self.export_list_button = QPushButton("导出列表"); self.export_list_button.setFont(self.chinese_font); self.export_list_button.clicked.connect(self.export_connections); self.export_list_button.setEnabled(False); file_group_layout.addWidget(self.export_list_button, 2, 0)
         self.export_topo_button = QPushButton("导出拓扑图"); self.export_topo_button.setFont(self.chinese_font); self.export_topo_button.clicked.connect(self.export_topology); self.export_topo_button.setEnabled(False); file_group_layout.addWidget(self.export_topo_button, 2, 1)
-        self.export_report_button = QPushButton("导出报告 (HTML)"); # <-- 新增按钮
-        self.export_report_button.setFont(self.chinese_font)
-        self.export_report_button.clicked.connect(self.export_html_report) # <-- 连接信号
-        self.export_report_button.setEnabled(False) # <-- 初始禁用
-        file_group_layout.addWidget(self.export_report_button, 3, 0, 1, 2) # <-- 添加到布局，跨两列
-        # --- 结束文件操作区域修改 ---
+        self.export_report_button = QPushButton("导出报告 (HTML)"); self.export_report_button.setFont(self.chinese_font); self.export_report_button.clicked.connect(self.export_html_report); self.export_report_button.setEnabled(False); file_group_layout.addWidget(self.export_report_button, 3, 0, 1, 2)
         left_layout.addWidget(file_group); left_layout.addStretch()
         right_panel = QFrame(); right_panel.setFrameShape(QFrame.Shape.StyledPanel)
         right_layout = QVBoxLayout(right_panel); main_splitter.addWidget(right_panel)
@@ -630,8 +532,9 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([400, 700])
         main_splitter.setStretchFactor(1, 1)
         self.update_port_entries()
+        self._update_connection_views() # <-- 初始显示节点
 
-    # --- 方法 (大部分与 V39 相同) ---
+    # --- 方法 (大部分与 V42 相同) ---
     @Slot()
     def update_port_entries(self):
         selected_type = self.device_type_combo.currentText()
@@ -693,10 +596,12 @@ class MainWindow(QMainWindow):
             elif dtype == 'MicroN': sfp_ports, mpo_ports, lc_ports = int(sfp_ports_str), 0, 0; assert sfp_ports >= 0
             else: raise ValueError("无效类型")
         except (ValueError, AssertionError): QMessageBox.critical(self, "输入错误", "端口数量必须是非负整数。"); return
-        self.device_id_counter += 1; new_device = Device(self.device_id_counter, name, dtype, mpo_ports, lc_ports, sfp_ports)
+        self.device_id_counter += 1
+        new_device = Device(self.device_id_counter, name, dtype, mpo_ports, lc_ports, sfp_ports) # new_device defined here
         self.devices.append(new_device); self._add_device_to_table(new_device); self.device_name_entry.clear();
-        self._update_device_combos(); self.clear_results()
+        self._update_device_combos(); self.clear_results() # clear_results calls _update_connection_views
         self.node_positions = None; self.selected_node_id = None
+        # No need to call _update_connection_views again here, clear_results does it
 
     @Slot()
     def remove_device(self):
@@ -705,15 +610,17 @@ class MainWindow(QMainWindow):
         ids_to_remove = {self.device_tablewidget.item(row_index, 0).data(Qt.ItemDataRole.UserRole) for row_index in selected_rows if self.device_tablewidget.item(row_index, 0)}
         self.devices = [dev for dev in self.devices if dev.id not in ids_to_remove]
         for row_index in selected_rows: self.device_tablewidget.removeRow(row_index)
-        self._update_device_combos(); self.clear_results()
+        self._update_device_combos(); self.clear_results() # clear_results calls _update_connection_views
         self.node_positions = None; self.selected_node_id = None
+        # No need to call _update_connection_views again here
 
     @Slot()
     def clear_all_devices(self):
         if QMessageBox.question(self, "确认", "确定要清空所有设备吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             self.devices = []; self.device_tablewidget.setRowCount(0); self.device_id_counter = 0;
-            self._update_device_combos(); self.clear_results()
+            self._update_device_combos(); self.clear_results() # clear_results calls _update_connection_views
             self.node_positions = None; self.selected_node_id = None
+            # No need to call _update_connection_views again here
 
     @Slot()
     def clear_results(self):
@@ -722,11 +629,14 @@ class MainWindow(QMainWindow):
         self.mpl_canvas.axes.cla(); self.mpl_canvas.axes.text(0.5, 0.5, '点击“计算”生成图形', ha='center', va='center'); self.mpl_canvas.draw()
         self.export_list_button.setEnabled(False)
         self.export_topo_button.setEnabled(False)
-        self.export_report_button.setEnabled(False) # <-- 更新：禁用报告按钮
+        self.export_report_button.setEnabled(False)
         self.remove_manual_button.setEnabled(False)
         self.fill_mesh_button.setEnabled(False); self.fill_ring_button.setEnabled(False)
+        # dev is defined in the loop below
         for dev in self.devices: dev.reset_ports()
         self._update_device_table_connections()
+        # Update views to reflect cleared state (e.g., show nodes if devices exist)
+        self._update_connection_views() # <-- Update views after clearing results
 
     @Slot(QTableWidgetItem)
     def show_device_details_from_table(self, item):
@@ -734,12 +644,12 @@ class MainWindow(QMainWindow):
          row = item.row(); name_item = self.device_tablewidget.item(row, 0)
          if not name_item: return
          dev_id = name_item.data(Qt.ItemDataRole.UserRole)
-         dev = next((d for d in self.devices if d.id == dev_id), None)
+         dev = next((d for d in self.devices if d.id == dev_id), None) # dev defined here
          if not dev: return QMessageBox.critical(self, "错误", "无法找到所选设备的详细信息。")
          self._display_device_details_popup(dev)
 
-    def _display_device_details_popup(self, dev):
-        details = f"ID: {dev.id}\n名称: {dev.name}\n类型: {dev.type}\n"
+    def _display_device_details_popup(self, dev): # dev passed as argument
+        details = f"ID: {dev.id}\n名称: {dev.name}\n类型: {dev.type}\n" # details defined here
         avail_ports = dev.get_all_available_ports()
         avail_lc_count = sum(1 for p in avail_ports if p.startswith("LC"))
         avail_sfp_count = sum(1 for p in avail_ports if p.startswith("SFP"))
@@ -754,13 +664,19 @@ class MainWindow(QMainWindow):
             mpo_conns_grouped = defaultdict(dict)
             for p, t in dev.port_connections.items():
                 if p.startswith("MPO"): mpo_conns_grouped[p.split('-')[0]][p] = t
-            if lc_conns: details += "  LC 连接:\n"; [details := details + f"    {port} -> {lc_conns[port]}\n" for port in sorted(lc_conns.keys())]
-            if sfp_conns: details += "  SFP+ 连接:\n"; [details := details + f"    {port} -> {sfp_conns[port]}\n" for port in sorted(sfp_conns.keys())]
+            if lc_conns:
+                details += "  LC 连接:\n" # Use += instead of :=
+                for port in sorted(lc_conns.keys()): details += f"    {port} -> {lc_conns[port]}\n"
+            if sfp_conns:
+                details += "  SFP+ 连接:\n"
+                for port in sorted(sfp_conns.keys()): details += f"    {port} -> {sfp_conns[port]}\n"
             if mpo_conns_grouped:
                 details += "  MPO 连接 (Breakout):\n"
                 for base_port in sorted(mpo_conns_grouped.keys()):
-                    details += f"    {base_port}:\n"; [details := details + f"      {port} -> {mpo_conns_grouped[base_port][port]}\n" for port in sorted(mpo_conns_grouped[base_port].keys(), key=lambda x: int(x.split('-Ch')[-1]))]
-        QMessageBox.information(self, f"设备详情 - {dev.name}", details)
+                    details += f"    {base_port}:\n"
+                    for port in sorted(mpo_conns_grouped[base_port].keys(), key=lambda x: int(x.split('-Ch')[-1])):
+                         details += f"      {port} -> {mpo_conns_grouped[base_port][port]}\n"
+        QMessageBox.information(self, f"设备详情 - {dev.name}", details) # details used here
 
     @Slot()
     def calculate_and_display(self):
@@ -803,7 +719,8 @@ class MainWindow(QMainWindow):
         self.filter_connection_list()
         selected_layout = self.layout_combo.currentText().lower()
         self.fig, calculated_pos = self.mpl_canvas.plot_topology(
-            self.devices, self.connections_result,
+            self.devices,
+            self.connections_result,
             layout_algorithm=selected_layout,
             fixed_pos=self.node_positions,
             selected_node_id=self.selected_node_id
@@ -811,13 +728,16 @@ class MainWindow(QMainWindow):
         if calculated_pos is not None and self.dragged_node_id is None:
              if self.node_positions is None:
                  self.node_positions = calculated_pos
-        # --- 更新：导出按钮状态 ---
+
+        # --- V43 Fix: Correct boolean logic for enabling buttons ---
         has_results = bool(self.connections_result)
-        has_figure = self.fig is not None # 检查 figure 是否已生成
+        # Enable topo/report export only if figure exists AND there are devices
+        has_figure = self.fig is not None and bool(self.devices)
         self.export_list_button.setEnabled(has_results)
-        self.export_topo_button.setEnabled(has_figure)
-        self.export_report_button.setEnabled(has_results and has_figure) # 报告需要两者都有
-        # --- 结束更新 ---
+        self.export_topo_button.setEnabled(has_figure) # Correctly use boolean
+        self.export_report_button.setEnabled(has_results and has_figure) # Correctly use boolean
+        # --- End V43 Fix ---
+        self.remove_manual_button.setEnabled(has_results) # Also ensure remove button depends on results
 
     def _update_device_table_connections(self):
         """更新设备表格中的连接数估算列，并设置数字排序"""
@@ -837,7 +757,7 @@ class MainWindow(QMainWindow):
     def remove_manual_connection(self):
         selected_items = self.manual_connection_list.selectedItems()
         if not selected_items: QMessageBox.warning(self, "提示", "请在下方列表中选择要移除的连接。"); return
-        items_to_remove_from_widget, connections_removed_count, connections_to_remove_data = [], 0, []
+        items_to_remove_from_widget, connections_removed_count, connections_to_remove_data = [], 0, [] # connections_removed_count defined here
         for item in selected_items: conn_data = item.data(Qt.ItemDataRole.UserRole); connections_to_remove_data.append(conn_data); items_to_remove_from_widget.append(item)
         for conn_data in connections_to_remove_data:
             dev1_orig, port1, dev2_orig, port2, conn_type = conn_data
@@ -853,7 +773,7 @@ class MainWindow(QMainWindow):
                     connections_removed_count += 1
                 else: print(f"警告: 移除时未找到匹配项: {conn_data}")
             except Exception as e: print(f"警告: 移除连接时出错: {e} - {conn_data}")
-        if connections_removed_count > 0:
+        if connections_removed_count > 0: # connections_removed_count used here
              self.node_positions = None; self.selected_node_id = None
              for item in items_to_remove_from_widget:
                  row = self.manual_connection_list.row(item)
@@ -868,13 +788,15 @@ class MainWindow(QMainWindow):
     @Slot()
     def add_manual_connection(self):
         dev1_id = self.edit_dev1_combo.currentData(); dev2_id = self.edit_dev2_combo.currentData()
-        port1_text = self.edit_port1_combo.currentText(); port2_text = self.edit_port2_combo.currentText()
+        port1_text = self.edit_port1_combo.currentText(); port2_text = self.edit_port2_combo.currentText() # port*_text defined here
         if dev1_id is None or dev2_id is None or port1_text == "选择端口..." or port2_text == "选择端口...": QMessageBox.warning(self, "选择不完整", "请选择两个设备和它们各自的端口。"); return
         if dev1_id == dev2_id: QMessageBox.warning(self, "选择错误", "不能将设备连接到自身。"); return
+        # dev1, dev2 defined here
         dev1 = next((d for d in self.devices if d.id == dev1_id), None); dev2 = next((d for d in self.devices if d.id == dev2_id), None)
         if not dev1 or not dev2: QMessageBox.critical(self, "内部错误", "找不到选定的设备对象。"); return
         port1_type = "LC" if port1_text.startswith("LC") else ("SFP" if port1_text.startswith("SFP") else ("MPO" if port1_text.startswith("MPO") else "Unknown"))
         port2_type = "LC" if port2_text.startswith("LC") else ("SFP" if port2_text.startswith("SFP") else ("MPO" if port2_text.startswith("MPO") else "Unknown"))
+        # conn_type_str, *_ref defined here
         conn_type_str = ""; valid_connection = False
         dev1_ref, dev2_ref = dev1, dev2; port1_ref, port2_ref = port1_text, port2_text
         if port1_type == "LC" and port2_type == "LC" and dev1_ref.type in ['MicroN UHD', 'HorizoN'] and dev2_ref.type in ['MicroN UHD', 'HorizoN']: valid_connection = True; conn_type_str = "LC-LC (100G)"
@@ -885,9 +807,13 @@ class MainWindow(QMainWindow):
              dev1, dev2 = dev2_ref, dev1_ref; port1_text, port2_text = port2_ref, port1_ref
              valid_connection = True; conn_type_str = "MPO-SFP (10G)"
         if not valid_connection: QMessageBox.warning(self, "连接无效", f"设备类型 '{dev1_ref.type}' 的端口 '{port1_type}' 与 设备类型 '{dev2_ref.type}' 的端口 '{port2_type}' 之间不允许连接。"); return
+
+        # dev1, port1_text used here
         if dev1.use_specific_port(port1_text, dev2.name):
+            # dev2, port2_text used here
             if dev2.use_specific_port(port2_text, dev1.name):
                 self.node_positions = None; self.selected_node_id = None
+                # dev1_ref, port1_ref, dev2_ref, port2_ref, conn_type_str used here
                 self.connections_result.append((dev1_ref, port1_ref, dev2_ref, port2_ref, conn_type_str))
                 self._update_connection_views(); self._update_device_table_connections()
                 self._populate_edit_port_combos(self.edit_dev1_combo, self.edit_port1_combo)
@@ -899,15 +825,19 @@ class MainWindow(QMainWindow):
                 dev1.return_port(port1_text)
                 QMessageBox.critical(self, "错误", f"端口 '{port2_ref}' 在设备 '{dev2_ref.name}' 上不可用或已被占用。")
                 self._populate_edit_port_combos(self.edit_dev1_combo if dev1.id == dev1_id else self.edit_dev2_combo, self.edit_port1_combo if dev1.id == dev1_id else self.edit_port2_combo)
-        else: QMessageBox.critical(self, "错误", f"端口 '{port1_ref}' 在设备 '{dev1_ref.name}' 上不可用或已被占用。")
+        else:
+            # --- V42 Fix: Indented this block ---
+            QMessageBox.critical(self, "错误", f"端口 '{port1_ref}' 在设备 '{dev1_ref.name}' 上不可用或已被占用。")
+            # --- End V42 Fix ---
 
     @Slot()
     def fill_remaining_mesh(self):
-        """使用 Mesh 算法填充剩余的可用端口 (V35 修正)"""
+        """使用 Mesh 算法填充剩余的可用端口"""
         if not self.devices: QMessageBox.information(self, "提示", "请先添加设备。"); return
         print("开始填充剩余连接 (Mesh)...")
+        # new_connections defined here
         new_connections = _fill_connections_mesh_style(self.devices)
-        if new_connections:
+        if new_connections: # new_connections used here
             print(f"找到 {len(new_connections)} 条新 Mesh 连接可以添加。")
             self.connections_result.extend(new_connections)
             print("更新设备状态...")
@@ -924,11 +854,12 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def fill_remaining_ring(self):
-        """使用 Ring 算法填充剩余的可用端口 (V35 修正)"""
+        """使用 Ring 算法填充剩余的可用端口"""
         if not self.devices: QMessageBox.information(self, "提示", "请先添加设备。"); return
         print("开始填充剩余连接 (环形)...")
+        # new_connections defined here
         new_connections = _fill_connections_ring_style(self.devices)
-        if new_connections:
+        if new_connections: # new_connections used here
             print(f"找到 {len(new_connections)} 条新环形连接段可以添加。")
             self.connections_result.extend(new_connections)
             print("更新设备状态...")
@@ -945,7 +876,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_layout_change(self):
-        if self.connections_result:
+        if self.connections_result or self.devices: # Update layout if devices exist, even without connections
             print("DIAG: Layout selection changed, resetting stored positions.")
             self.node_positions = None; self.selected_node_id = None
             self._update_connection_views()
@@ -976,9 +907,10 @@ class MainWindow(QMainWindow):
             self._update_device_combos()
             QMessageBox.information(self, "成功", f"配置已从以下文件加载:\n{filepath}")
             self.node_positions = None; self.selected_node_id = None
+            self._update_connection_views() # Call after loading and clearing results
         except FileNotFoundError: QMessageBox.critical(self, "加载失败", "找不到文件。")
         except json.JSONDecodeError: QMessageBox.critical(self, "加载失败", "文件格式错误。")
-        except Exception as e: QMessageBox.critical(self, "加载失败", f"发生错误:\n{e}")
+        except Exception as e: QMessageBox.critical(self, "加载失败", f"发生错误:\n{e}") # Catch other potential errors
 
     @Slot()
     def export_connections(self):
@@ -1002,137 +934,54 @@ class MainWindow(QMainWindow):
         filepath, selected_filter = QFileDialog.getSaveFileName(self, "导出拓扑图", "", "PNG 图像 (*.png);;PDF 文件 (*.pdf);;SVG 文件 (*.svg);;所有文件 (*)")
         if not filepath: return
         try:
-            # 提高导出分辨率
             self.fig.savefig(filepath, dpi=300, bbox_inches='tight')
             QMessageBox.information(self, "成功", f"拓扑图已导出到:\n{filepath}")
         except Exception as e: QMessageBox.critical(self, "导出失败", f"无法导出拓扑图:\n{e}")
 
-    # --- 新增：导出 HTML 报告的槽函数 ---
     @Slot()
     def export_html_report(self):
         """导出包含拓扑图和连接列表的 HTML 报告"""
-        if not self.connections_result or not self.mpl_canvas.fig:
-            QMessageBox.warning(self, "无法导出", "请先计算连接并生成拓扑图。")
+        if not self.devices or not self.mpl_canvas.fig: # Check devices as well
+            QMessageBox.warning(self, "无法导出", "请先添加设备并生成拓扑图（可能需要计算连接）。")
             return
 
-        filepath, _ = QFileDialog.getSaveFileName(
-            self,
-            "导出 HTML 报告",
-            "", # 默认目录
-            "HTML 文件 (*.html);;所有文件 (*)" # 文件过滤器
-        )
-        if not filepath: # 如果用户取消
-            return
-
+        filepath, _ = QFileDialog.getSaveFileName(self, "导出 HTML 报告", "", "HTML 文件 (*.html);;所有文件 (*)")
+        if not filepath: return
         try:
-            # 1. 将 Matplotlib 图形保存到内存中的 PNG
             buffer = io.BytesIO()
-            # 使用稍高的 DPI 导出，并确保紧凑边界框
             self.mpl_canvas.fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
             buffer.seek(0)
-            # 2. 将 PNG 图像编码为 Base64 字符串
             image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
             img_data_uri = f"data:image/png;base64,{image_base64}"
-
-            # 3. 准备连接列表 HTML (使用表格)
             connections_html = """
-            <div class="mt-8">
-                <h2 class="text-lg font-semibold mb-3">连接列表</h2>
-                <div class="overflow-x-auto bg-white rounded-lg shadow">
-                    <table class="min-w-full leading-normal">
-                        <thead>
-                            <tr>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">序号</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 1</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 1</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 2</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 2</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">类型</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+            <div class="mt-8"> <h2 class="text-lg font-semibold mb-3">连接列表</h2> <div class="overflow-x-auto bg-white rounded-lg shadow">
+            <table class="min-w-full leading-normal"> <thead> <tr>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">序号</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 1</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 1</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 2</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 2</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">类型</th>
+            </tr> </thead> <tbody>
             """
             if self.connections_result:
                 for i, conn in enumerate(self.connections_result):
                     dev1, port1, dev2, port2, conn_type = conn
-                    # 添加斑马条纹效果
                     bg_class = "bg-white" if i % 2 == 0 else "bg-gray-50"
                     connections_html += f"""
-                            <tr class="{bg_class}">
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{i+1}</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev1.name} ({dev1.type})</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{port1}</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev2.name} ({dev2.type})</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{port2}</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{conn_type}</td>
-                            </tr>
+                            <tr class="{bg_class}"> <td class="px-5 py-4 border-b border-gray-200 text-sm">{i+1}</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev1.name} ({dev1.type})</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{port1}</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev2.name} ({dev2.type})</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{port2}</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{conn_type}</td> </tr>
                     """
-            else:
-                connections_html += """
-                            <tr>
-                                <td colspan="6" class="px-5 py-5 border-b border-gray-200 bg-white text-center text-sm text-gray-500">无连接</td>
-                            </tr>
-                """
-            connections_html += """
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            """
-
-            # 4. 生成完整的 HTML 结构
+            else: connections_html += """ <tr> <td colspan="6" class="px-5 py-5 border-b border-gray-200 bg-white text-center text-sm text-gray-500">无连接</td> </tr> """
+            connections_html += """ </tbody> </table> </div> </div> """
             html_content = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MediorNet 连接报告</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }}
-        /* 增加打印样式，确保背景色和边框在打印时可见 */
-        @media print {{
-            body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
-            .bg-gray-100 {{ background-color: #f7fafc !important; }}
-            .bg-gray-50 {{ background-color: #f9fafb !important; }}
-            .border-b-2 {{ border-bottom-width: 2px !important; }}
-            .border-gray-200 {{ border-color: #edf2f7 !important; }}
-            .shadow {{ box-shadow: none !important; }}
-        }}
-    </style>
-</head>
-<body class="bg-gray-100">
-    <div class="container mx-auto p-6 md:p-10 bg-white rounded-lg shadow-xl my-10 max-w-4xl">
-        <h1 class="text-2xl font-bold text-center mb-8 text-gray-700">MediorNet 连接报告</h1>
-
-        <div class="mb-8">
-            <h2 class="text-lg font-semibold mb-3 text-gray-600">网络连接拓扑图</h2>
-            <div class="flex justify-center p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-inner">
-                 <img src="{img_data_uri}" alt="网络拓扑图" style="max-width: 100%; height: auto;" class="rounded">
-            </div>
-        </div>
-
-        {connections_html}
-
-        <div class="text-center text-xs text-gray-400 mt-10">
-            报告生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        </div>
-    </div>
-</body>
-</html>
+<head> <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0"> <title>MediorNet 连接报告</title> <script src="https://cdn.tailwindcss.com"></script> <style> body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }} @media print {{ body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }} .bg-gray-100 {{ background-color: #f7fafc !important; }} .bg-gray-50 {{ background-color: #f9fafb !important; }} .border-b-2 {{ border-bottom-width: 2px !important; }} .border-gray-200 {{ border-color: #edf2f7 !important; }} .shadow {{ box-shadow: none !important; }} }} </style> </head>
+<body class="bg-gray-100"> <div class="container mx-auto p-6 md:p-10 bg-white rounded-lg shadow-xl my-10 max-w-4xl"> <h1 class="text-2xl font-bold text-center mb-8 text-gray-700">MediorNet 连接报告</h1> <div class="mb-8"> <h2 class="text-lg font-semibold mb-3 text-gray-600">网络连接拓扑图</h2> <div class="flex justify-center p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-inner"> <img src="{img_data_uri}" alt="网络拓扑图" style="max-width: 100%; height: auto;" class="rounded"> </div> </div> {connections_html} <div class="text-center text-xs text-gray-400 mt-10"> 报告生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} </div> </div> </body> </html>
             """
-
-            # 5. 写入文件
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-
+            with open(filepath, 'w', encoding='utf-8') as f: f.write(html_content)
             QMessageBox.information(self, "导出成功", f"HTML 报告已成功导出到:\n{filepath}")
-
-        except Exception as e:
-            QMessageBox.critical(self, "导出失败", f"导出 HTML 报告时发生错误:\n{e}")
-            print(f"导出 HTML 报告错误: {e}")
-    # --- 结束新增槽函数 ---
+        except Exception as e: QMessageBox.critical(self, "导出失败", f"导出 HTML 报告时发生错误:\n{e}"); print(f"导出 HTML 报告错误: {e}")
 
     @Slot(str)
     def filter_device_table(self, text):
@@ -1164,22 +1013,25 @@ class MainWindow(QMainWindow):
             if filter_device_text: device_match = (filter_device_text in dev1_name_lower or filter_device_text in dev2_name_lower)
             item.setHidden(not (type_match and device_match))
 
+    # --- 画布事件处理 (与 V41 相同) ---
     @Slot(object)
     def on_canvas_press(self, event):
-        """处理画布上的鼠标按下事件 (单击, 双击, 开始拖动)"""
+        """处理画布上的鼠标按下事件 (单击, 双击, 开始拖动/连接)"""
+        if self.connection_line:
+            try: self.connection_line.remove()
+            except ValueError: pass
+            self.connection_line = None
         if event.inaxes != self.mpl_canvas.axes or not self.node_positions:
-            needs_redraw = self.selected_node_id is not None or self.dragged_node_id is not None
-            self.selected_node_id = None; self.dragged_node_id = None
+            needs_redraw = self.selected_node_id is not None or self.dragged_node_id is not None or self.connecting_node_id is not None
+            self.selected_node_id = None; self.dragged_node_id = None; self.connecting_node_id = None
             if needs_redraw: self._update_connection_views()
             return
-
         x, y = event.xdata, event.ydata
         if x is None or y is None:
-            needs_redraw = self.selected_node_id is not None or self.dragged_node_id is not None
-            self.selected_node_id = None; self.dragged_node_id = None
+            needs_redraw = self.selected_node_id is not None or self.dragged_node_id is not None or self.connecting_node_id is not None
+            self.selected_node_id = None; self.dragged_node_id = None; self.connecting_node_id = None
             if needs_redraw: self._update_connection_views()
             return
-
         clicked_node_id = None; min_dist_sq = float('inf')
         xlim = self.mpl_canvas.axes.get_xlim(); ylim = self.mpl_canvas.axes.get_ylim()
         diagonal_len_sq = (xlim[1]-xlim[0])**2 + (ylim[1]-ylim[0])**2
@@ -1188,26 +1040,37 @@ class MainWindow(QMainWindow):
             dist_sq = (x - nx)**2 + (y - ny)**2
             if dist_sq < min_dist_sq and dist_sq < threshold_dist_sq:
                  min_dist_sq = dist_sq; clicked_node_id = node_id
-
+        modifiers = QGuiApplication.keyboardModifiers()
+        is_shift_pressed = modifiers == Qt.KeyboardModifier.ShiftModifier
         if event.dblclick:
-            self.dragged_node_id = None
+            self.dragged_node_id = None; self.connecting_node_id = None
             if clicked_node_id is not None:
                 print(f"双击节点: {clicked_node_id}")
                 device = next((d for d in self.devices if d.id == clicked_node_id), None)
                 if device: self._display_device_details_popup(device)
         elif event.button == 1:
             if clicked_node_id is not None:
-                self.dragged_node_id = clicked_node_id
-                nx, ny = self.node_positions[clicked_node_id]
-                self.drag_offset = (x - nx, y - ny)
-                if self.selected_node_id != clicked_node_id:
-                    self.selected_node_id = clicked_node_id
-                    print(f"选中节点 (准备拖动): {self.selected_node_id}")
-                    self._update_connection_views()
+                if is_shift_pressed:
+                    print(f"开始连接拖动: 从 {clicked_node_id}")
+                    self.connecting_node_id = clicked_node_id
+                    self.dragged_node_id = None
+                    if self.selected_node_id != clicked_node_id:
+                        self.selected_node_id = clicked_node_id
+                        self._update_connection_views()
                 else:
-                     print(f"开始拖动节点: {self.selected_node_id}")
+                    self.dragged_node_id = clicked_node_id
+                    self.connecting_node_id = None
+                    nx, ny = self.node_positions[clicked_node_id]
+                    self.drag_offset = (x - nx, y - ny)
+                    if self.selected_node_id != clicked_node_id:
+                        self.selected_node_id = clicked_node_id
+                        print(f"选中节点 (准备拖动): {self.selected_node_id}")
+                        self._update_connection_views()
+                    else:
+                         print(f"开始拖动节点: {self.selected_node_id}")
             else:
                 self.dragged_node_id = None
+                self.connecting_node_id = None
                 if self.selected_node_id is not None:
                     self.selected_node_id = None
                     print("清除选中 (点击背景)")
@@ -1215,33 +1078,91 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def on_canvas_motion(self, event):
-        """处理画布上的鼠标移动事件 (用于拖动节点)"""
-        if self.dragged_node_id is None or event.button != 1 or event.inaxes != self.mpl_canvas.axes:
-            return
+        """处理画布上的鼠标移动事件 (用于节点拖动或连接线绘制)"""
+        if event.inaxes != self.mpl_canvas.axes: return
         x, y = event.xdata, event.ydata
         if x is None or y is None: return
-
-        new_x = x - self.drag_offset[0]
-        new_y = y - self.drag_offset[1]
-        self.node_positions[self.dragged_node_id] = (new_x, new_y)
-        self._update_connection_views()
+        if self.dragged_node_id is not None and event.button == 1:
+            new_x = x - self.drag_offset[0]; new_y = y - self.drag_offset[1]
+            self.node_positions[self.dragged_node_id] = (new_x, new_y)
+            self._update_connection_views()
+        elif self.connecting_node_id is not None and event.button == 1:
+            start_pos = self.node_positions[self.connecting_node_id]
+            if self.connection_line:
+                try: self.connection_line.remove()
+                except ValueError: pass
+                self.connection_line = None
+            self.connection_line = Line2D(
+                [start_pos[0], x], [start_pos[1], y],
+                linestyle='--', color='gray', lw=1.5, transform=self.mpl_canvas.axes.transData,
+                zorder=10
+            )
+            self.mpl_canvas.axes.add_line(self.connection_line)
+            self.mpl_canvas.draw_idle()
 
     @Slot(object)
     def on_canvas_release(self, event):
-        """处理画布上的鼠标释放事件 (结束拖动)"""
-        if event.button == 1 and self.dragged_node_id is not None:
-            print(f"结束拖动节点: {self.dragged_node_id}")
-            self.dragged_node_id = None
-            self.mpl_canvas.draw_idle()
+        """处理画布上的鼠标释放事件 (结束拖动/连接)"""
+        if event.button == 1:
+            if self.dragged_node_id is not None:
+                print(f"结束拖动节点: {self.dragged_node_id}")
+                self.dragged_node_id = None
+                self.mpl_canvas.draw_idle()
+            elif self.connecting_node_id is not None:
+                start_node_id = self.connecting_node_id
+                self.connecting_node_id = None
+                if self.connection_line:
+                    try: self.connection_line.remove()
+                    except ValueError: pass
+                    self.connection_line = None
+                    self.mpl_canvas.draw_idle()
+                target_node_id = None
+                if event.inaxes == self.mpl_canvas.axes and event.xdata is not None and event.ydata is not None:
+                    x, y = event.xdata, event.ydata
+                    min_dist_sq = float('inf')
+                    xlim = self.mpl_canvas.axes.get_xlim(); ylim = self.mpl_canvas.axes.get_ylim()
+                    diagonal_len_sq = (xlim[1]-xlim[0])**2 + (ylim[1]-ylim[0])**2
+                    threshold_dist_sq = diagonal_len_sq * (0.03**2)
+                    for node_id, (nx, ny) in self.node_positions.items():
+                        dist_sq = (x - nx)**2 + (y - ny)**2
+                        if dist_sq < min_dist_sq and dist_sq < threshold_dist_sq:
+                             min_dist_sq = dist_sq; target_node_id = node_id
+                if target_node_id is not None and target_node_id != start_node_id:
+                    start_device = next((d for d in self.devices if d.id == start_node_id), None)
+                    target_device = next((d for d in self.devices if d.id == target_node_id), None)
+                    if start_device and target_device:
+                        print(f"尝试连接: {start_device.name} -> {target_device.name}")
+                        dev1_copy = copy.deepcopy(start_device); dev2_copy = copy.deepcopy(target_device)
+                        port1, port2, conn_type = _find_best_single_link(dev1_copy, dev2_copy)
+                        if port1 and port2:
+                            actual_start_dev, actual_target_dev = start_device, target_device
+                            start_port, target_port = port1, port2
+                            if dev1_copy.id != start_node_id:
+                                start_port, target_port = port2, port1
+                            if start_device.use_specific_port(start_port, target_device.name):
+                                if target_device.use_specific_port(target_port, start_device.name):
+                                    self.node_positions = None; self.selected_node_id = None
+                                    self.connections_result.append((start_device, start_port, target_device, target_port, conn_type))
+                                    self._update_connection_views(); self._update_device_table_connections(); self._update_device_combos()
+                                    print(f"成功通过拖拽添加连接: {start_device.name}[{start_port}] <-> {target_device.name}[{target_port}]")
+                                    enable_fill = bool(self.connections_result) or any(dev.get_all_available_ports() for dev in self.devices)
+                                    self.fill_mesh_button.setEnabled(enable_fill); self.fill_ring_button.setEnabled(enable_fill)
+                                else:
+                                    start_device.return_port(start_port)
+                                    QMessageBox.warning(self, "连接失败", f"无法在设备 '{target_device.name}' 上使用端口 '{target_port}'。")
+                            else:
+                                 QMessageBox.warning(self, "连接失败", f"无法在设备 '{start_device.name}' 上使用端口 '{start_port}'。")
+                        else: QMessageBox.information(self, "连接失败", f"在 {start_device.name} 和 {target_device.name} 之间未找到兼容的可用端口。")
+                    else: print("错误：找不到拖放连接的设备对象。")
+                else: print("连接拖动取消或目标无效。")
     # --- 结束事件处理 ---
 
-# --- 程序入口 (与 V39 相同) ---
+# --- 程序入口 (与 V42 相同) ---
 if __name__ == "__main__":
-    # --- 新增：导入 datetime ---
     import datetime
-    # --- 结束新增导入 ---
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLE)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
