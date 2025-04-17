@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V44
+# MediorNet TDM 连接计算器 V45
 # 主要变更:
-# - 增强错误/警告信息：在计算、填充、手动添加/拖拽连接失败时提供更具体的原因。
-# - 优化手动添加连接：端口下拉列表会根据另一侧的选择进行过滤，只显示兼容的可用端口。
-# - 保留 V43 的功能。
+# - 在设备列表下方增加了 MPO, LC, SFP+ 端口的总数统计显示。
+# - 在拓扑图的左下角也添加了端口总数统计显示。
+# - 保留 V44 的功能。
 
 import sys
 import tkinter as tk
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot, Qt
 from PySide6.QtGui import QFont, QGuiApplication
 
-# --- QSS 样式定义 (与 V43 相同) ---
+# --- QSS 样式定义 (与 V44 相同) ---
 APP_STYLE = """
 QMainWindow, QDialog, QMessageBox { }
 QFrame { background-color: transparent; }
@@ -61,7 +61,7 @@ QSplitter::handle:vertical { height: 3px; }
 QSplitter::handle:hover { background-color: #d0d0d0; }
 """
 
-# --- 用于数字排序的 QTableWidgetItem 子类 (与 V43 相同) ---
+# --- 用于数字排序的 QTableWidgetItem 子类 (与 V44 相同) ---
 class NumericTableWidgetItem(QTableWidgetItem):
     """自定义 QTableWidgetItem 以支持数字排序。"""
     def __lt__(self, other):
@@ -74,7 +74,7 @@ class NumericTableWidgetItem(QTableWidgetItem):
         except (TypeError, ValueError):
             return super().__lt__(other)
 
-# --- 数据结构 (与 V43 相同) ---
+# --- 数据结构 (与 V44 相同) ---
 class Device:
     """代表一个 MediorNet 设备"""
     def __init__(self, id, name, type, mpo_ports=0, lc_ports=0, sfp_ports=0):
@@ -133,7 +133,6 @@ class Device:
              pass
 
     def get_available_port(self, port_type, target_device_name):
-        # 这个函数理论上不再需要，但暂时保留
         possible_ports = []
         if port_type == 'LC': possible_ports = [f"LC{i+1}" for i in range(self.lc_total)]
         elif port_type == 'MPO':
@@ -173,9 +172,9 @@ class Device:
     def __repr__(self):
         return f"{self.name} ({self.type})"
 
-# --- 连接计算逻辑 ---
+# --- 连接计算逻辑 (与 V44 相同) ---
 
-# --- 新增：端口兼容性检查辅助函数 ---
+# 端口兼容性检查辅助函数
 def check_port_compatibility(dev1_type, port1_name, dev2_type, port2_name):
     """检查两个端口之间是否兼容"""
     port1_type = "LC" if port1_name.startswith("LC") else \
@@ -184,74 +183,48 @@ def check_port_compatibility(dev1_type, port1_name, dev2_type, port2_name):
     port2_type = "LC" if port2_name.startswith("LC") else \
                  "SFP" if port2_name.startswith("SFP") else \
                  "MPO" if port2_name.startswith("MPO") else "Unknown"
-
-    is_uhd1 = dev1_type in ['MicroN UHD', 'HorizoN']
-    is_uhd2 = dev2_type in ['MicroN UHD', 'HorizoN']
-    is_mn1 = dev1_type == 'MicroN'
-    is_mn2 = dev2_type == 'MicroN'
-
+    is_uhd1 = dev1_type in ['MicroN UHD', 'HorizoN']; is_uhd2 = dev2_type in ['MicroN UHD', 'HorizoN']
+    is_mn1 = dev1_type == 'MicroN'; is_mn2 = dev2_type == 'MicroN'
     if port1_type == "LC" and port2_type == "LC" and is_uhd1 and is_uhd2: return True, "LC-LC (100G)"
     if port1_type == "MPO" and port2_type == "MPO" and is_uhd1 and is_uhd2: return True, "MPO-MPO (25G)"
     if port1_type == "SFP" and port2_type == "SFP" and is_mn1 and is_mn2: return True, "SFP-SFP (10G)"
     if port1_type == "MPO" and port2_type == "SFP" and is_uhd1 and is_mn2: return True, "MPO-SFP (10G)"
-    if port1_type == "SFP" and port2_type == "MPO" and is_mn1 and is_uhd2: return True, "MPO-SFP (10G)" # 类型规范化
-
+    if port1_type == "SFP" and port2_type == "MPO" and is_mn1 and is_uhd2: return True, "MPO-SFP (10G)"
     return False, None
 
-# --- 新增：获取兼容端口类型的辅助函数 ---
+# 获取兼容端口类型的辅助函数
 def _get_compatible_port_types(other_dev_type, other_port_name):
     """根据另一侧设备类型和端口，获取本侧设备兼容的端口类型列表"""
     other_port_type = "LC" if other_port_name.startswith("LC") else \
                       "SFP" if other_port_name.startswith("SFP") else \
                       "MPO" if other_port_name.startswith("MPO") else "Unknown"
     compatible_here = []
-    is_other_uhd = other_dev_type in ['MicroN UHD', 'HorizoN']
-    is_other_mn = other_dev_type == 'MicroN'
-
-    # 推断本侧设备可能的类型来判断兼容性
-    # 如果对方是 UHD/HorizoN
+    is_other_uhd = other_dev_type in ['MicroN UHD', 'HorizoN']; is_other_mn = other_dev_type == 'MicroN'
     if is_other_uhd:
-        if other_port_type == 'LC': compatible_here = ['LC'] # 只能连 UHD/HorizoN 的 LC
-        elif other_port_type == 'MPO': compatible_here = ['MPO', 'SFP'] # 可以连 UHD/HorizoN 的 MPO 或 MicroN 的 SFP
-    # 如果对方是 MicroN
+        if other_port_type == 'LC': compatible_here = ['LC']
+        elif other_port_type == 'MPO': compatible_here = ['MPO', 'SFP']
     elif is_other_mn:
-        if other_port_type == 'SFP': compatible_here = ['MPO', 'SFP'] # 可以连 UHD/HorizoN 的 MPO 或 MicroN 的 SFP
-
+        if other_port_type == 'SFP': compatible_here = ['MPO', 'SFP']
     return compatible_here
 
-
-# 辅助函数 (查找最佳连接)
+# 查找最佳连接辅助函数
 def _find_best_single_link(dev1_copy, dev2_copy):
-    """
-    辅助函数：查找两个设备副本之间最高优先级的单个可用连接。
-    返回 (port1, port2, conn_type) 或 (None, None, None)
-    如果找到连接，会直接在副本上调用 use_specific_port 消耗端口。
-    """
-    # 尝试 LC-LC
+    """辅助函数：查找两个设备副本之间最高优先级的单个可用连接。"""
     if dev1_copy.type in ['MicroN UHD', 'HorizoN'] and dev2_copy.type in ['MicroN UHD', 'HorizoN']:
         port1 = dev1_copy.get_specific_available_port('LC')
         if port1:
             port2 = dev2_copy.get_specific_available_port('LC')
-            if port2:
-                dev1_copy.use_specific_port(port1, dev2_copy.name); dev2_copy.use_specific_port(port2, dev1_copy.name)
-                return port1, port2, 'LC-LC (100G)'
-    # 尝试 MPO-MPO
+            if port2: dev1_copy.use_specific_port(port1, dev2_copy.name); dev2_copy.use_specific_port(port2, dev1_copy.name); return port1, port2, 'LC-LC (100G)'
     if dev1_copy.type in ['MicroN UHD', 'HorizoN'] and dev2_copy.type in ['MicroN UHD', 'HorizoN']:
         port1 = dev1_copy.get_specific_available_port('MPO')
         if port1:
             port2 = dev2_copy.get_specific_available_port('MPO')
-            if port2:
-                dev1_copy.use_specific_port(port1, dev2_copy.name); dev2_copy.use_specific_port(port2, dev1_copy.name)
-                return port1, port2, 'MPO-MPO (25G)'
-    # 尝试 SFP-SFP
+            if port2: dev1_copy.use_specific_port(port1, dev2_copy.name); dev2_copy.use_specific_port(port2, dev1_copy.name); return port1, port2, 'MPO-MPO (25G)'
     if dev1_copy.type == 'MicroN' and dev2_copy.type == 'MicroN':
         port1 = dev1_copy.get_specific_available_port('SFP')
         if port1:
             port2 = dev2_copy.get_specific_available_port('SFP')
-            if port2:
-                dev1_copy.use_specific_port(port1, dev2_copy.name); dev2_copy.use_specific_port(port2, dev1_copy.name)
-                return port1, port2, 'SFP-SFP (10G)'
-    # 尝试 MPO-SFP
+            if port2: dev1_copy.use_specific_port(port1, dev2_copy.name); dev2_copy.use_specific_port(port2, dev1_copy.name); return port1, port2, 'SFP-SFP (10G)'
     uhd_dev, micron_dev = (None, None); original_dev1 = dev1_copy
     if dev1_copy.type in ['MicroN UHD', 'HorizoN'] and dev2_copy.type == 'MicroN': uhd_dev, micron_dev = dev1_copy, dev2_copy
     elif dev2_copy.type in ['MicroN UHD', 'HorizoN'] and dev1_copy.type == 'MicroN': uhd_dev, micron_dev = dev2_copy, dev1_copy
@@ -262,7 +235,7 @@ def _find_best_single_link(dev1_copy, dev2_copy):
             if port_micron:
                 uhd_dev.use_specific_port(port_uhd, micron_dev.name); micron_dev.use_specific_port(port_micron, uhd_dev.name)
                 if original_dev1 == uhd_dev: return port_uhd, port_micron, 'MPO-SFP (10G)'
-                else: return port_micron, port_uhd, 'MPO-SFP (10G)' # 返回端口顺序对应原始 dev1, dev2
+                else: return port_micron, port_uhd, 'MPO-SFP (10G)'
     return None, None, None
 
 # Mesh 计算函数
@@ -276,7 +249,7 @@ def calculate_mesh_connections(devices):
     connected_once_pairs = set()
     print("Phase 1: 尝试为每个设备对建立第一条连接...")
     made_progress_phase1 = True
-    failed_pairs_phase1 = [] # 记录第一阶段失败的对
+    failed_pairs_phase1 = []
     while made_progress_phase1:
         made_progress_phase1 = False
         for dev1_id, dev2_id in all_pairs_ids:
@@ -290,14 +263,10 @@ def calculate_mesh_connections(devices):
                     else: connections.append((original_dev2, port2, original_dev1, port1, conn_type))
                     connected_once_pairs.add(pair_key); made_progress_phase1 = True
                 else:
-                    # 记录失败的对，避免在 Phase 1 无限循环
-                    if pair_key not in [fp[0] for fp in failed_pairs_phase1]: # 简单记录，避免重复
+                    if pair_key not in [fp[0] for fp in failed_pairs_phase1]:
                         failed_pairs_phase1.append((pair_key, f"{original_dev1.name} <-> {original_dev2.name}"))
-        if not made_progress_phase1: break # 如果一轮没有进展，退出 Phase 1
-
-    if len(connected_once_pairs) < len(all_pairs_ids):
-         print(f"警告: Phase 1 未能为所有设备对建立连接。失败 {len(all_pairs_ids) - len(connected_once_pairs)} 对。")
-
+        if not made_progress_phase1: break
+    if len(connected_once_pairs) < len(all_pairs_ids): print(f"警告: Phase 1 未能为所有设备对建立连接。失败 {len(all_pairs_ids) - len(connected_once_pairs)} 对。")
     print(f"Phase 1 完成. 建立了 {len(connections)} 条初始连接。")
     print("Phase 2: 填充剩余端口...")
     connection_made_in_full_pass_phase2 = True
@@ -321,15 +290,13 @@ def calculate_ring_connections(devices):
     if len(devices) < 2: return [], {}, "设备数量少于2，无法形成环形"
     if len(devices) == 2:
         conns, state = calculate_mesh_connections(devices)
-        return conns, state, None # 两个设备按 Mesh 处理
-
+        return conns, state, None
     connections = []; temp_devices = [copy.deepcopy(dev) for dev in devices]
     for d in temp_devices: d.reset_ports()
     device_map = {dev.id: dev for dev in temp_devices}
     sorted_dev_ids = sorted([d.id for d in devices]); num_devices = len(sorted_dev_ids)
-    link_established = [True] * num_devices # 假设都能成功
+    link_established = [True] * num_devices
     failed_segments = []
-
     for i in range(num_devices):
         dev1_id = sorted_dev_ids[i]; dev2_id = sorted_dev_ids[(i + 1) % num_devices]
         dev1_copy = device_map[dev1_id]; dev2_copy = device_map[dev2_id]
@@ -342,13 +309,11 @@ def calculate_ring_connections(devices):
             link_established[i] = False
             failed_segments.append(f"{original_dev1.name} 和 {original_dev2.name}")
             print(f"警告: 无法在 {original_dev1.name} 和 {original_dev2.name} 之间建立环形连接段。")
-
     error_message = None
     if not all(link_established):
         error_message = f"未能完成完整的环形连接。无法连接的段落：{', '.join(failed_segments)}。"
         print(f"警告: {error_message}")
-
-    return connections, device_map, error_message # 返回错误信息
+    return connections, device_map, error_message
 
 # 内部 Mesh 填充辅助函数
 def _fill_connections_mesh_style(devices_current_state):
@@ -398,7 +363,7 @@ def _fill_connections_ring_style(devices_current_state):
 # --- 结束连接计算逻辑 ---
 
 
-# --- Matplotlib Canvas Widget (与 V43 相同) ---
+# --- Matplotlib Canvas Widget (与 V44 相同) ---
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
@@ -408,7 +373,9 @@ class MplCanvas(FigureCanvas):
         FigureCanvas.setSizePolicy(self, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         FigureCanvas.updateGeometry(self)
 
-    def plot_topology(self, devices, connections, layout_algorithm='spring', fixed_pos=None, selected_node_id=None):
+    # --- 修改：添加 port_totals_dict 参数 ---
+    def plot_topology(self, devices, connections, layout_algorithm='spring', fixed_pos=None, selected_node_id=None, port_totals_dict=None):
+        """绘制拓扑图，支持节点高亮和显示端口总数""" # <--- 修改注释
         self.axes.cla()
         if not devices: self.axes.text(0.5, 0.5, '无设备数据', ha='center', va='center'); self.draw(); return None, None
         chinese_font_name = find_chinese_font(); font_prop = None; current_font_family = 'sans-serif'
@@ -482,6 +449,16 @@ class MplCanvas(FigureCanvas):
                  color = default_label_color if (not is_selected_node_present or is_highlighted) else dimmed_label_color
                  edge_label_colors[edge_key] = color
             nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7, ax=self.axes, label_pos=0.5, rotate=False, font_family=current_font_family, font_color=default_label_color)
+
+        # --- 新增：在图形上显示端口总数 ---
+        if port_totals_dict is not None:
+            totals_text = f"端口总计: MPO: {port_totals_dict['mpo']}, LC: {port_totals_dict['lc']}, SFP+: {port_totals_dict['sfp']}"
+            # 在图形左下角添加文本 (使用图形坐标系)
+            self.fig.text(0.01, 0.01, totals_text,
+                          ha='left', va='bottom', fontsize=7, color='grey',
+                          transform=self.fig.transFigure) # 使用 Figure 坐标系
+        # --- 结束新增 ---
+
         self.axes.set_title("网络连接拓扑图", fontproperties=font_prop); self.axes.axis('off')
         legend_elements = [
             plt.Line2D([0], [0], marker='o', color='w', label='MicroN UHD', markerfacecolor='skyblue', markersize=10),
@@ -492,11 +469,13 @@ class MplCanvas(FigureCanvas):
         ]
         legend_prop_small = copy.copy(font_prop); legend_prop_small.set_size('small')
         self.axes.legend(handles=legend_elements, loc='best', prop=legend_prop_small)
-        self.fig.tight_layout(); self.draw_idle()
+        # 调整布局以适应底部的文本
+        self.fig.tight_layout(rect=[0, 0.03, 1, 1]) # rect=[left, bottom, right, top]
+        self.draw_idle()
         return self.fig, pos
 # --- 结束 Matplotlib Canvas ---
 
-# --- 辅助函数 (查找字体，与 V43 相同) ---
+# --- 辅助函数 (查找字体，与 V44 相同) ---
 def find_chinese_font():
     font_names = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Heiti SC', 'STHeiti', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'sans-serif']
     font_paths = font_manager.findSystemFonts(fontpaths=None, fontext='ttf')
@@ -517,7 +496,7 @@ def find_chinese_font():
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V44 (PySide6)") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器 V1.01 -- By Vega Sun") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
@@ -534,7 +513,7 @@ class MainWindow(QMainWindow):
         elif os_system == "Darwin": font_families.append("PingFang SC")
         font_families.extend(["Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])
         self.chinese_font = QFont(); self.chinese_font.setFamilies(font_families); self.chinese_font.setPointSize(10)
-        # --- 主布局与控件 (与 V43 相同) ---
+        # --- 主布局与控件 ---
         main_widget = QWidget(); self.setCentralWidget(main_widget); main_layout = QHBoxLayout(main_widget)
         main_splitter = QSplitter(Qt.Orientation.Horizontal); main_layout.addWidget(main_splitter)
         left_panel = QFrame(); left_panel.setFrameShape(QFrame.Shape.StyledPanel);
@@ -557,6 +536,14 @@ class MainWindow(QMainWindow):
         self.device_tablewidget.setColumnWidth(1, 90); self.device_tablewidget.setColumnWidth(2, 50); self.device_tablewidget.setColumnWidth(3, 50); self.device_tablewidget.setColumnWidth(4, 50); self.device_tablewidget.setColumnWidth(5, 80)
         self.device_tablewidget.itemDoubleClicked.connect(self.show_device_details_from_table); list_group_layout.addWidget(self.device_tablewidget)
         device_op_layout = QHBoxLayout(); self.remove_button = QPushButton("移除选中"); self.remove_button.setFont(self.chinese_font); self.remove_button.clicked.connect(self.remove_device); self.clear_button = QPushButton("清空所有"); self.clear_button.setFont(self.chinese_font); self.clear_button.clicked.connect(self.clear_all_devices); device_op_layout.addWidget(self.remove_button); device_op_layout.addWidget(self.clear_button); list_group_layout.addLayout(device_op_layout)
+        # --- 新增：端口总数标签 ---
+        self.port_totals_label = QLabel("总计: MPO: 0, LC: 0, SFP+: 0")
+        font = self.port_totals_label.font(); font.setBold(True)
+        self.port_totals_label.setFont(font)
+        self.port_totals_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.port_totals_label.setStyleSheet("padding-top: 5px; padding-right: 5px;") # 添加一些内边距
+        list_group_layout.addWidget(self.port_totals_label) # 添加到设备列表组布局中
+        # --- 结束新增 ---
         left_layout.addWidget(list_group)
         file_group = QFrame(); file_group.setObjectName("fileGroup"); file_group_layout = QGridLayout(file_group); file_group_layout.setContentsMargins(10, 15, 10, 10); file_title = QLabel("<b>文件操作</b>"); file_title.setFont(QFont(self.chinese_font.family(), 11)); file_group_layout.addWidget(file_title, 0, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
         self.save_button = QPushButton("保存配置"); self.save_button.setFont(self.chinese_font); self.save_button.clicked.connect(self.save_config); self.load_button = QPushButton("加载配置"); self.load_button.setFont(self.chinese_font); self.load_button.clicked.connect(self.load_config); file_group_layout.addWidget(self.save_button, 1, 0); file_group_layout.addWidget(self.load_button, 1, 1)
@@ -588,12 +575,10 @@ class MainWindow(QMainWindow):
         add_manual_layout.addWidget(QLabel("设备 1:", font=self.chinese_font), 1, 0); self.edit_dev1_combo = QComboBox(); self.edit_dev1_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_dev1_combo, 1, 1); add_manual_layout.addWidget(QLabel("端口 1:", font=self.chinese_font), 1, 2); self.edit_port1_combo = QComboBox(); self.edit_port1_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_port1_combo, 1, 3)
         add_manual_layout.addWidget(QLabel("设备 2:", font=self.chinese_font), 2, 0); self.edit_dev2_combo = QComboBox(); self.edit_dev2_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_dev2_combo, 2, 1); add_manual_layout.addWidget(QLabel("端口 2:", font=self.chinese_font), 2, 2); self.edit_port2_combo = QComboBox(); self.edit_port2_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_port2_combo, 2, 3)
         self.add_manual_button = QPushButton("添加连接"); self.add_manual_button.setFont(self.chinese_font); self.add_manual_button.clicked.connect(self.add_manual_connection); add_manual_layout.addWidget(self.add_manual_button, 3, 0, 1, 4, alignment=Qt.AlignmentFlag.AlignCenter)
-        # --- 修改：连接信号到新的统一处理函数 ---
         self.edit_dev1_combo.currentIndexChanged.connect(self._update_manual_port_options)
         self.edit_port1_combo.currentIndexChanged.connect(self._update_manual_port_options)
         self.edit_dev2_combo.currentIndexChanged.connect(self._update_manual_port_options)
         self.edit_port2_combo.currentIndexChanged.connect(self._update_manual_port_options)
-        # --- 结束修改 ---
         edit_main_layout.addWidget(add_manual_group)
         remove_manual_group = QFrame(); remove_manual_group.setObjectName("removeManualGroup"); remove_manual_group.setFrameShape(QFrame.Shape.StyledPanel); remove_manual_layout = QVBoxLayout(remove_manual_group); remove_manual_layout.setContentsMargins(10,10,10,10); remove_title = QLabel("<b>移除现有连接</b> (选中下方列表中的连接进行移除)"); remove_title.setFont(self.chinese_font); remove_manual_layout.addWidget(remove_title)
         filter_conn_layout = QHBoxLayout()
@@ -615,6 +600,7 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([400, 700])
         main_splitter.setStretchFactor(1, 1)
         self.update_port_entries()
+        self._update_port_totals_display() # <-- 初始更新总数
         self._update_connection_views()
 
     # --- 方法 ---
@@ -655,7 +641,6 @@ class MainWindow(QMainWindow):
         self.edit_dev1_combo.blockSignals(False); self.edit_dev2_combo.blockSignals(False)
         self._update_manual_port_options()
 
-    # --- 修改：重构端口下拉列表填充逻辑 ---
     def _populate_edit_port_combos(self,
                                    device_combo_to_populate, # 需要填充端口的设备下拉框
                                    port_combo_to_populate,   # 需要填充的端口下拉框
@@ -712,7 +697,6 @@ class MainWindow(QMainWindow):
 
         port_combo_to_populate.blockSignals(False)
 
-    # --- 新增：统一的端口选项更新槽函数 ---
     @Slot()
     def _update_manual_port_options(self):
         """统一更新手动添加连接中的两个端口下拉列表的选项"""
@@ -726,7 +710,20 @@ class MainWindow(QMainWindow):
             self.edit_dev2_combo, self.edit_port2_combo,
             self.edit_dev1_combo, self.edit_port1_combo
         )
-    # --- 结束新增 ---
+
+    # --- 新增：计算端口总数 ---
+    def _calculate_port_totals(self):
+        """计算当前设备列表中各类端口的总数"""
+        total_mpo = sum(dev.mpo_total for dev in self.devices)
+        total_lc = sum(dev.lc_total for dev in self.devices)
+        total_sfp = sum(dev.sfp_total for dev in self.devices)
+        return {'mpo': total_mpo, 'lc': total_lc, 'sfp': total_sfp}
+
+    # --- 新增：更新端口总数显示 ---
+    def _update_port_totals_display(self):
+        """更新显示端口总数的标签"""
+        totals = self._calculate_port_totals()
+        self.port_totals_label.setText(f"总计: MPO: {totals['mpo']}, LC: {totals['lc']}, SFP+: {totals['sfp']}")
 
     @Slot()
     def add_device(self):
@@ -743,9 +740,10 @@ class MainWindow(QMainWindow):
         self.device_id_counter += 1
         new_device = Device(self.device_id_counter, name, dtype, mpo_ports, lc_ports, sfp_ports)
         self.devices.append(new_device); self._add_device_to_table(new_device); self.device_name_entry.clear();
-        self._update_device_combos(); self.clear_results()
+        self._update_device_combos(); self.clear_results() # clear_results 会调用 _update_connection_views
         self.node_positions = None; self.selected_node_id = None
-        self._update_connection_views()
+        self._update_port_totals_display() # <-- 更新总数
+        # _update_connection_views() # <-- V44: 已在 clear_results 中调用
 
     @Slot()
     def remove_device(self):
@@ -763,17 +761,19 @@ class MainWindow(QMainWindow):
                  try: self.connections_result.remove(conn)
                  except ValueError: self.connections_result = [c for c in self.connections_result if not (c[0].id == conn[0].id and c[2].id == conn[2].id and c[1] == conn[1] and c[3] == conn[3])]
         for row_index in selected_rows: self.device_tablewidget.removeRow(row_index)
-        self._update_device_combos(); self.clear_results()
+        self._update_device_combos(); self.clear_results() # clear_results 会调用 _update_connection_views
         self.node_positions = None; self.selected_node_id = None
-        self._update_connection_views()
+        self._update_port_totals_display() # <-- 更新总数
+        # _update_connection_views() # <-- V44: 已在 clear_results 中调用
 
     @Slot()
     def clear_all_devices(self):
         if QMessageBox.question(self, "确认", "确定要清空所有设备吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             self.devices = []; self.device_tablewidget.setRowCount(0); self.device_id_counter = 0;
-            self._update_device_combos(); self.clear_results()
+            self._update_device_combos(); self.clear_results() # clear_results 会调用 _update_connection_views
             self.node_positions = None; self.selected_node_id = None
-            self._update_connection_views()
+            self._update_port_totals_display() # <-- 更新总数
+            # _update_connection_views() # <-- V44: 已在 clear_results 中调用
 
     @Slot()
     def clear_results(self):
@@ -787,6 +787,7 @@ class MainWindow(QMainWindow):
         self.fill_mesh_button.setEnabled(False); self.fill_ring_button.setEnabled(False)
         for dev in self.devices: dev.reset_ports()
         self._update_device_table_connections()
+        self._update_port_totals_display() # <-- 更新总数
         self._update_connection_views()
 
     @Slot(QTableWidgetItem)
@@ -877,25 +878,25 @@ class MainWindow(QMainWindow):
         else: self.remove_manual_button.setEnabled(False)
         self.filter_connection_list()
         selected_layout = self.layout_combo.currentText().lower()
+        # --- 修改：传递端口总数 ---
+        port_totals = self._calculate_port_totals()
         self.fig, calculated_pos = self.mpl_canvas.plot_topology(
             self.devices,
             self.connections_result,
             layout_algorithm=selected_layout,
             fixed_pos=self.node_positions,
-            selected_node_id=self.selected_node_id
+            selected_node_id=self.selected_node_id,
+            port_totals_dict=port_totals # <--- 传递总数
         )
+        # --- 结束修改 ---
         if calculated_pos is not None and self.dragged_node_id is None:
              if self.node_positions is None:
                  self.node_positions = calculated_pos
-
-        # --- V43 Fix: 正确设置按钮状态 ---
         has_results = bool(self.connections_result)
-        # 导出按钮状态取决于是否有设备和图形
         has_figure = self.fig is not None and bool(self.devices)
         self.export_list_button.setEnabled(has_results)
         self.export_topo_button.setEnabled(has_figure)
         self.export_report_button.setEnabled(has_results and has_figure)
-        # --- End V43 Fix ---
         self.remove_manual_button.setEnabled(has_results)
 
     def _update_device_table_connections(self):
@@ -938,7 +939,8 @@ class MainWindow(QMainWindow):
                  row = self.manual_connection_list.row(item)
                  if row != -1: self.manual_connection_list.takeItem(row)
              self._update_connection_views(); self._update_device_table_connections()
-             self._update_manual_port_options() # <--- 更新端口选项
+             self._update_manual_port_options()
+             self._update_port_totals_display() # <-- 更新总数
              print(f"成功移除了 {connections_removed_count} 条连接。")
              enable_fill = bool(self.connections_result) or any(dev.get_all_available_ports() for dev in self.devices)
              self.fill_mesh_button.setEnabled(enable_fill); self.fill_ring_button.setEnabled(enable_fill)
@@ -953,40 +955,35 @@ class MainWindow(QMainWindow):
         dev1 = next((d for d in self.devices if d.id == dev1_id), None); dev2 = next((d for d in self.devices if d.id == dev2_id), None)
         if not dev1 or not dev2: QMessageBox.critical(self, "内部错误", "找不到选定的设备对象。"); return
 
-        # --- 使用辅助函数检查兼容性 ---
         compatible, conn_type_str = check_port_compatibility(dev1.type, port1_text, dev2.type, port2_text)
         if not compatible:
             QMessageBox.warning(self, "连接无效", f"设备类型 '{dev1.type}' 的端口 '{port1_text}' 与 设备类型 '{dev2.type}' 的端口 '{port2_text}' 之间不允许连接。")
             return
-        # --- 结束 ---
 
-        # 检查端口是否真的可用
         if port1_text not in dev1.get_all_available_ports():
              QMessageBox.warning(self, "端口错误", f"端口 '{port1_text}' 在设备 '{dev1.name}' 上已被占用或无效。")
-             self._update_manual_port_options() # 刷新列表
-             return
+             self._update_manual_port_options(); return
         if port2_text not in dev2.get_all_available_ports():
              QMessageBox.warning(self, "端口错误", f"端口 '{port2_text}' 在设备 '{dev2.name}' 上已被占用或无效。")
-             self._update_manual_port_options() # 刷新列表
-             return
+             self._update_manual_port_options(); return
 
-        # 应用连接
         if dev1.use_specific_port(port1_text, dev2.name):
             if dev2.use_specific_port(port2_text, dev1.name):
                 self.node_positions = None; self.selected_node_id = None
                 self.connections_result.append((dev1, port1_text, dev2, port2_text, conn_type_str))
                 self._update_connection_views(); self._update_device_table_connections()
-                self._update_manual_port_options() # 更新端口选项
+                self._update_manual_port_options()
+                self._update_port_totals_display() # <-- 更新总数
                 print(f"成功添加手动连接: {dev1.name}[{port1_text}] <-> {dev2.name}[{port2_text}]")
                 enable_fill = bool(self.connections_result) or any(dev.get_all_available_ports() for dev in self.devices)
                 self.fill_mesh_button.setEnabled(enable_fill); self.fill_ring_button.setEnabled(enable_fill)
             else:
-                dev1.return_port(port1_text) # 归还第一个端口
+                dev1.return_port(port1_text)
                 QMessageBox.critical(self, "错误", f"尝试占用端口 '{port2_text}' 失败 (设备 '{dev2.name}')，可能已被占用。")
-                self._update_manual_port_options() # 刷新列表
+                self._update_manual_port_options()
         else:
              QMessageBox.critical(self, "错误", f"尝试占用端口 '{port1_text}' 失败 (设备 '{dev1.name}')，可能已被占用。")
-             self._update_manual_port_options() # 刷新列表
+             self._update_manual_port_options()
 
     @Slot()
     def fill_remaining_mesh(self):
@@ -1005,6 +1002,7 @@ class MainWindow(QMainWindow):
             print("更新视图...")
             self.selected_node_id = None
             self._update_connection_views(); self._update_device_table_connections(); self._update_manual_port_options()
+            self._update_port_totals_display() # <-- 更新总数
             QMessageBox.information(self, "填充完成", f"成功添加了 {len(new_connections)} 条新 Mesh 连接。")
         else: QMessageBox.information(self, "填充完成", "没有找到更多可以建立的 Mesh 连接。"); print("未找到可填充的新 Mesh 连接。")
         self.fill_mesh_button.setEnabled(False); self.fill_ring_button.setEnabled(False)
@@ -1026,6 +1024,7 @@ class MainWindow(QMainWindow):
             print("更新视图...")
             self.selected_node_id = None
             self._update_connection_views(); self._update_device_table_connections(); self._update_manual_port_options()
+            self._update_port_totals_display() # <-- 更新总数
             QMessageBox.information(self, "填充完成", f"成功添加了 {len(new_connections)} 条新环形连接段。")
         else: QMessageBox.information(self, "填充完成", "没有找到更多可以建立的环形连接段。"); print("未找到可填充的新环形连接段。")
         self.fill_mesh_button.setEnabled(False); self.fill_ring_button.setEnabled(False)
@@ -1063,6 +1062,7 @@ class MainWindow(QMainWindow):
             self._update_device_combos()
             QMessageBox.information(self, "成功", f"配置已从以下文件加载:\n{filepath}")
             self.node_positions = None; self.selected_node_id = None
+            self._update_port_totals_display() # <-- 更新总数
             self._update_connection_views()
         except FileNotFoundError: QMessageBox.critical(self, "加载失败", "找不到文件。")
         except json.JSONDecodeError: QMessageBox.critical(self, "加载失败", "文件格式错误。")
@@ -1203,7 +1203,7 @@ class MainWindow(QMainWindow):
             if filter_device_text: device_match = (filter_device_text in dev1_name_lower or filter_device_text in dev2_name_lower)
             item.setHidden(not (type_match and device_match))
 
-    # --- 画布事件处理 (与 V43 相同) ---
+    # --- 画布事件处理 (与 V44 相同) ---
     @Slot(object)
     def on_canvas_press(self, event):
         """处理画布上的鼠标按下事件 (单击, 双击, 开始拖动/连接)"""
@@ -1332,14 +1332,15 @@ class MainWindow(QMainWindow):
                             compatible, final_conn_type = check_port_compatibility(actual_start_dev.type, start_port, actual_target_dev.type, target_port)
                             if not compatible:
                                 QMessageBox.warning(self, "连接错误", f"自动选择的端口 {start_port} ({actual_start_dev.type}) 和 {target_port} ({actual_target_dev.type}) 之间存在兼容性问题。")
-                                self._update_manual_port_options() # 刷新可能受影响的列表
-                                return # 提前退出
+                                self._update_manual_port_options()
+                                return
 
                             if start_device.use_specific_port(start_port, target_device.name):
                                 if target_device.use_specific_port(target_port, start_device.name):
                                     self.node_positions = None; self.selected_node_id = None
                                     self.connections_result.append((start_device, start_port, target_device, target_port, final_conn_type))
                                     self._update_connection_views(); self._update_device_table_connections(); self._update_manual_port_options()
+                                    self._update_port_totals_display() # <-- 更新总数
                                     print(f"成功通过拖拽添加连接: {start_device.name}[{start_port}] <-> {target_device.name}[{target_port}]")
                                     enable_fill = bool(self.connections_result) or any(dev.get_all_available_ports() for dev in self.devices)
                                     self.fill_mesh_button.setEnabled(enable_fill); self.fill_ring_button.setEnabled(enable_fill)
@@ -1355,7 +1356,7 @@ class MainWindow(QMainWindow):
                 else: print("连接拖动取消或目标无效。")
     # --- 结束事件处理 ---
 
-# --- 程序入口 (与 V43 相同) ---
+# --- 程序入口 (与 V44 相同) ---
 if __name__ == "__main__":
     import datetime
     app = QApplication(sys.argv)
