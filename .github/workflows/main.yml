@@ -1,62 +1,104 @@
-# .github/workflows/build-windows.yml
+# .github/workflows/build-windows-macos.yml
 
-name: Build Windows Executable
+name: Build Windows & macOS Executables & Release
 
 # 控制工作流触发的时机
 on:
   push:
-    branches: [ main ]  # 当代码推送到 main 分支时触发
+    branches: [ main ]  # 当代码推送到 main 分支时触发 (用于测试构建)
     tags:
-      - 'v*' # 当创建 v 开头的标签时触发 (适合发布版本)
+      - 'v*' # 当创建 v 开头的标签时触发 (用于发布 Release)
   workflow_dispatch:      # 允许手动从 GitHub Actions 页面触发
 
+# --- V44: 添加权限以创建 Release ---
 permissions:
   contents: write # 需要此权限来创建 Release 和上传附件
 
 jobs:
-  build:
-    # 指定运行环境为最新的 Windows
+  build-windows:
+    name: Build for Windows
     runs-on: windows-latest
-
     steps:
-      # 第一步：签出代码
-      # 获取你的仓库代码到 Actions 运行器中
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # 第二步：设置 Python 环境
-      # 安装指定版本的 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # 替换为您项目使用的 Python 版本
-
-      # 第三步：安装依赖
-      # 安装 requirements.txt 中列出的库和 PyInstaller
+          python-version: '3.11'
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt } else { Write-Host "requirements.txt not found." }
           pip install pyinstaller
-
-      # 第四步：运行 PyInstaller
-      # 执行打包命令，生成单个 exe 文件
-      # 注意：--add-data 的路径分隔符在 Windows 上是 ';'
-      # 注意：PowerShell (默认 shell) 的换行符是 '`'
-      - name: Run PyInstaller (One-File)
+      - name: Run PyInstaller (Windows One-File)
         run: |
           pyinstaller TDMC.py `
             --name MediorNetCalculator `
             --onefile `
             --windowed
-
-      # 第五步：上传构建产物
-      # 将 dist 文件夹中生成的 exe 文件作为 "artifact" 上传
-      - name: Upload Artifact
+      - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediorNetCalculator-Windows-exe # 上传的压缩包名称
-          path: dist/MediorNetCalculator.exe    # 要上传的 exe 文件路径
+          name: MediorNetCalculator-Windows-exe # 注意这个名称，下载时会用到
+          path: dist/MediorNetCalculator.exe
+
+  build-macos-x64:
+    name: Build for macOS (Intel x64)
+    runs-on: macos-12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else echo "requirements.txt not found."; fi
+          pip install pyinstaller
+      - name: Run PyInstaller (macOS x64 One-File)
+        run: |
+          pyinstaller TDMC.py \
+            --name MediorNetCalculator \
+            --onefile \
+            --windowed
+      - name: Zip .app bundle (x64)
+        run: ditto -c -k --sequesterRsrc --keepParent dist/MediorNetCalculator.app dist/MediorNetCalculator-macOS-x64.zip
+      - name: Upload macOS x64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediorNetCalculator-macOS-x64-app-zip # 注意这个名称
+          path: dist/MediorNetCalculator-macOS-x64.zip
+
+  build-macos-arm64:
+    name: Build for macOS (Apple Silicon arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else echo "requirements.txt not found."; fi
+          pip install pyinstaller
+      - name: Run PyInstaller (macOS arm64 One-File)
+        run: |
+          pyinstaller TDMC.py \
+            --name MediorNetCalculator \
+            --onefile \
+            --windowed
+      - name: Zip .app bundle (arm64)
+        run: ditto -c -k --sequesterRsrc --keepParent dist/MediorNetCalculator.app dist/MediorNetCalculator-macOS-arm64.zip
+      - name: Upload macOS arm64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediorNetCalculator-macOS-arm64-app-zip # 注意这个名称
+          path: dist/MediorNetCalculator-macOS-arm64.zip
 
   # --- 新增：Release Job ---
   release:
@@ -64,7 +106,7 @@ jobs:
     # 仅当推送 v 开头的 tag 时运行
     if: startsWith(github.ref, 'refs/tags/v')
     # 需要等待所有 build job 成功完成
-    needs: [build]
+    needs: [build-windows, build-macos-x64, build-macos-arm64]
     runs-on: ubuntu-latest # Release 创建本身不依赖特定 OS
 
     steps:
@@ -91,8 +133,11 @@ jobs:
           # download-artifact@v4 会将每个 artifact 放入其名称对应的子目录中
           files: |
             release-assets/MediorNetCalculator-Windows-exe/MediorNetCalculator.exe
+            release-assets/MediorNetCalculator-macOS-x64-app-zip/MediorNetCalculator-macOS-x64.zip
+            release-assets/MediorNetCalculator-macOS-arm64-app-zip/MediorNetCalculator-macOS-arm64.zip
           # 可选：自动生成 Release Notes
           # generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 必须，用于认证
   # --- 结束 Release Job ---
+
