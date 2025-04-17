@@ -62,6 +62,7 @@ jobs:
   release:
     name: Create GitHub Release
     # 仅当推送 v 开头的 tag 时运行
+    if: startsWith(github.ref, 'refs/tags/v')
     # 需要等待所有 build job 成功完成
     needs: [build]
     runs-on: ubuntu-latest # Release 创建本身不依赖特定 OS
