@@ -580,7 +580,7 @@ class MplCanvas(FigureCanvas):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V48 (PySide6)")
+        self.setWindowTitle("MediorNet TDM 连接计算器 V1.1")
         self.setGeometry(100, 100, 1100, 800)
         # ... (成员变量初始化，与 V47 相同) ...
         self.devices = []
@@ -630,7 +630,7 @@ class MainWindow(QMainWindow):
         file_group = QFrame(); file_group.setObjectName("fileGroup"); file_group_layout = QGridLayout(file_group); file_group_layout.setContentsMargins(10, 15, 10, 10); file_title = QLabel("<b>文件操作</b>"); file_title.setFont(QFont(self.chinese_font.family(), 11)); file_group_layout.addWidget(file_title, 0, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter); self.save_button = QPushButton("保存配置"); self.save_button.setFont(self.chinese_font); self.save_button.clicked.connect(self.save_config); self.load_button = QPushButton("加载配置"); self.load_button.setFont(self.chinese_font); self.load_button.clicked.connect(self.load_config); file_group_layout.addWidget(self.save_button, 1, 0); file_group_layout.addWidget(self.load_button, 1, 1); self.export_list_button = QPushButton("导出列表"); self.export_list_button.setFont(self.chinese_font); self.export_list_button.clicked.connect(self.export_connections); self.export_list_button.setEnabled(False); file_group_layout.addWidget(self.export_list_button, 2, 0); self.export_topo_button = QPushButton("导出拓扑图"); self.export_topo_button.setFont(self.chinese_font); self.export_topo_button.clicked.connect(self.export_topology); self.export_topo_button.setEnabled(False); file_group_layout.addWidget(self.export_topo_button, 2, 1); self.export_report_button = QPushButton("导出报告 (HTML)"); self.export_report_button.setFont(self.chinese_font); self.export_report_button.clicked.connect(self.export_html_report); self.export_report_button.setEnabled(False); file_group_layout.addWidget(self.export_report_button, 3, 0, 1, 2); left_layout.addWidget(file_group)
 
         # 跳过确认弹窗设置
-        suppress_frame = QFrame(); suppress_frame.setFrameShape(QFrame.Shape.NoFrame); suppress_layout = QHBoxLayout(suppress_frame); suppress_layout.setContentsMargins(10, 0, 10, 5); self.suppress_confirm_checkbox = QCheckBox("跳过确认弹窗 (危险!)"); self.suppress_confirm_checkbox.setFont(self.chinese_font); self.suppress_confirm_checkbox.stateChanged.connect(self._toggle_suppress_confirmations); suppress_layout.addWidget(self.suppress_confirm_checkbox); suppress_layout.addStretch(); left_layout.addWidget(suppress_frame)
+        suppress_frame = QFrame(); suppress_frame.setFrameShape(QFrame.Shape.NoFrame); suppress_layout = QHBoxLayout(suppress_frame); suppress_layout.setContentsMargins(10, 0, 10, 5); self.suppress_confirm_checkbox = QCheckBox("跳过确认弹窗"); self.suppress_confirm_checkbox.setFont(self.chinese_font); self.suppress_confirm_checkbox.stateChanged.connect(self._toggle_suppress_confirmations); suppress_layout.addWidget(self.suppress_confirm_checkbox); suppress_layout.addStretch(); left_layout.addWidget(suppress_frame)
         left_layout.addStretch()
 
         # 右侧面板与 Tab 页
