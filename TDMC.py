@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V46
+# MediorNet TDM 连接计算器 V47
 # 主要变更:
-# - 允许在设备列表中直接双击编辑设备名称和端口数量。
-# - 添加了编辑内容的验证逻辑。
-# - 修改端口数量会清除现有连接并提示用户确认。
-# - 修改名称会自动更新相关引用。
-# - 提供完整代码，不再省略。
+# - 新增 "跳过确认弹窗 (危险!)" 复选框，选中后将自动确认清空、修改端口数、加载覆盖等操作。
+# - 关键错误提示（如名称冲突、端口无效）不受影响，仍会弹出。
+# - 保留 V46 的功能。
 
 import sys
 import tkinter as tk
@@ -23,20 +21,19 @@ import copy
 import json
 from collections import defaultdict
 import io
+import os
 import base64
 import datetime
-import os # 需要 os 模块
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QComboBox, QTextEdit,
     QTabWidget, QFrame, QFileDialog, QMessageBox, QSpacerItem, QSizePolicy,
     QGridLayout, QListWidgetItem, QAbstractItemView, QTableWidget, QTableWidgetItem,
-    QHeaderView, QListWidget, QSplitter
+    QHeaderView, QListWidget, QSplitter, QCheckBox # <-- 新增 QCheckBox
 )
 from PySide6.QtCore import Slot, Qt
-from PySide6.QtGui import QFont, QGuiApplication, QFontDatabase # 导入 QFontDatabase
-
+from PySide6.QtGui import QFont, QGuiApplication
 # --- 辅助函数 resource_path (用于打包后查找资源) ---
 def resource_path(relative_path):
     """ 获取资源的绝对路径，适用于开发环境和 PyInstaller 打包后 """
@@ -552,7 +549,7 @@ class MplCanvas(FigureCanvas):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V46 (PySide6)") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器 V47") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
@@ -564,6 +561,7 @@ class MainWindow(QMainWindow):
         self.drag_offset = (0, 0)
         self.connecting_node_id = None
         self.connection_line = None
+        self.suppress_confirmations = False # <-- 新增状态变量
         # 字体加载 (与 V45 相同, 依赖 resource_path)
         try:
             font_relative_path = os.path.join('assets', 'NotoSansCJKsc-Regular.otf')
@@ -614,6 +612,17 @@ class MainWindow(QMainWindow):
         self.port_totals_label = QLabel("总计: MPO: 0, LC: 0, SFP+: 0"); font = self.port_totals_label.font(); font.setBold(True); self.port_totals_label.setFont(font); self.port_totals_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter); self.port_totals_label.setStyleSheet("padding-top: 5px; padding-right: 5px;"); list_group_layout.addWidget(self.port_totals_label)
         left_layout.addWidget(list_group)
         file_group = QFrame(); file_group.setObjectName("fileGroup"); file_group_layout = QGridLayout(file_group); file_group_layout.setContentsMargins(10, 15, 10, 10); file_title = QLabel("<b>文件操作</b>"); file_title.setFont(QFont(self.chinese_font.family(), 11)); file_group_layout.addWidget(file_title, 0, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
+        # --- 新增: 跳过确认弹窗设置 ---
+        suppress_frame = QFrame()
+        # suppress_frame.setObjectName("suppressGroup") # 可选，如果需要单独样式
+        suppress_frame.setFrameShape(QFrame.Shape.NoFrame) # 无边框
+        suppress_layout = QHBoxLayout(suppress_frame); suppress_layout.setContentsMargins(10, 0, 10, 5) # 调整边距
+        self.suppress_confirm_checkbox = QCheckBox("跳过确认弹窗")
+        self.suppress_confirm_checkbox.setFont(self.chinese_font)
+        self.suppress_confirm_checkbox.stateChanged.connect(self._toggle_suppress_confirmations)
+        suppress_layout.addWidget(self.suppress_confirm_checkbox)
+        suppress_layout.addStretch() # Push checkbox to the left
+        left_layout.addWidget(suppress_frame) # 添加到文件组下方
         self.save_button = QPushButton("保存配置"); self.save_button.setFont(self.chinese_font); self.save_button.clicked.connect(self.save_config); self.load_button = QPushButton("加载配置"); self.load_button.setFont(self.chinese_font); self.load_button.clicked.connect(self.load_config); file_group_layout.addWidget(self.save_button, 1, 0); file_group_layout.addWidget(self.load_button, 1, 1)
         self.export_list_button = QPushButton("导出列表"); self.export_list_button.setFont(self.chinese_font); self.export_list_button.clicked.connect(self.export_connections); self.export_list_button.setEnabled(False); file_group_layout.addWidget(self.export_list_button, 2, 0)
         self.export_topo_button = QPushButton("导出拓扑图"); self.export_topo_button.setFont(self.chinese_font); self.export_topo_button.clicked.connect(self.export_topology); self.export_topo_button.setEnabled(False); file_group_layout.addWidget(self.export_topo_button, 2, 1)
@@ -724,6 +733,14 @@ class MainWindow(QMainWindow):
         self.device_tablewidget.setItem(row_position, 3, lc_item)
         self.device_tablewidget.setItem(row_position, 4, sfp_item)
         self.device_tablewidget.setItem(row_position, 5, conn_item)
+    
+    # --- 新增：处理跳过确认的槽函数 ---
+    @Slot(int)
+    def _toggle_suppress_confirmations(self, state):
+        """更新是否跳过确认弹窗的状态"""
+        self.suppress_confirmations = (state == Qt.CheckState.Checked.value)
+        print(f"跳过确认弹窗: {'已启用' if self.suppress_confirmations else '已禁用'}")
+    # --- 结束新增 ---
 
     # --- 新增：处理表格项编辑的槽函数 ---
     @Slot(QTableWidgetItem)
@@ -788,19 +805,26 @@ class MainWindow(QMainWindow):
                     if new_count < 0: raise ValueError("端口数不能为负")
 
                     if new_count != old_count:
-                        reply = QMessageBox.question(self, "确认修改端口数量",
-                                                     f"修改设备 '{device.name}' 的 {port_type_name} 端口数量将清除所有现有连接并可能需要重新计算布局。\n是否继续？",
-                                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                                     QMessageBox.StandardButton.No)
-                        if reply == QMessageBox.StandardButton.Yes:
+                        # --- 修改：检查是否跳过确认 ---
+                        user_confirmed_port_change = True # 默认同意（如果跳过）
+                        if not self.suppress_confirmations:
+                            reply = QMessageBox.question(self, "确认修改端口数量",
+                                                         f"修改设备 '{device.name}' 的 {port_type_name} 端口数量将清除所有现有连接并可能需要重新计算布局。\n是否继续？",
+                                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                                         QMessageBox.StandardButton.No)
+                            user_confirmed_port_change = (reply == QMessageBox.StandardButton.Yes)
+                        # --- 结束修改 ---
+
+                        if user_confirmed_port_change:
                             print(f"设备 '{device.name}' 的 {attr_name} 从 {old_count} 修改为 {new_count}")
                             setattr(device, attr_name, new_count)
                             # 清除连接并更新所有相关 UI
-                            self.clear_results()
+                            self.clear_results() # 会调用 _update_connection_views
                             self._update_port_totals_display()
                             self._update_manual_port_options() # 端口数变化影响可用端口
-                            self._update_connection_views() # 重绘图形
+                            # self._update_connection_views() # clear_results 内部会调用
                         else:
+                            print("用户取消修改端口数量。")
                             item.setText(str(old_count)) # 用户取消，恢复原值
                     # else: 值未改变，无需操作
 
@@ -809,6 +833,7 @@ class MainWindow(QMainWindow):
                     item.setText(str(old_count)) # 恢复原值
         finally:
             self.device_tablewidget.blockSignals(False) # 恢复信号
+    # --- 结束新增 ---
 
     # --- 结束新增 ---
 
@@ -953,12 +978,23 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def clear_all_devices(self):
-        if QMessageBox.question(self, "确认", "确定要清空所有设备吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+        # --- 修改：检查跳过确认 ---
+        user_confirmed = True # 默认同意
+        if not self.suppress_confirmations:
+            reply = QMessageBox.question(self, "确认", "确定要清空所有设备吗？",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                         QMessageBox.StandardButton.No)
+            user_confirmed = (reply == QMessageBox.StandardButton.Yes)
+        # --- 结束修改 ---
+
+        if user_confirmed:
             self.devices = []; self.device_tablewidget.setRowCount(0); self.device_id_counter = 0;
             self._update_device_combos(); self.clear_results()
             self.node_positions = None; self.selected_node_id = None
             self._update_port_totals_display()
-            self._update_connection_views()
+            # self._update_connection_views() # 由 clear_results 调用
+        else:
+            print("用户取消清空所有设备。")
 
     @Slot()
     def clear_results(self):
@@ -1234,7 +1270,19 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def load_config(self):
-        if self.devices and QMessageBox.question(self, "确认", "加载配置将覆盖当前设备列表，确定吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.No: return
+        # --- 修改：检查跳过确认 ---
+        user_confirmed_load = True # 默认同意
+        if self.devices: # 仅当列表非空时才询问
+            if not self.suppress_confirmations:
+                reply = QMessageBox.question(self, "确认", "加载配置将覆盖当前设备列表，确定吗？",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                             QMessageBox.StandardButton.No)
+                user_confirmed_load = (reply == QMessageBox.StandardButton.Yes)
+
+        if not user_confirmed_load:
+            print("用户取消加载配置。")
+            return
+        # --- 结束修改 ---
         filepath, _ = QFileDialog.getOpenFileName(self, "加载设备配置", "", "JSON 文件 (*.json);;所有文件 (*)")
         if not filepath: return
         try:
