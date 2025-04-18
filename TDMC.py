@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# MediorNet TDM 连接计算器 V45
+# MediorNet TDM 连接计算器 V47
 # 主要变更:
-# - 在设备列表下方增加了 MPO, LC, SFP+ 端口的总数统计显示。
-# - 在拓扑图的左下角也添加了端口总数统计显示。
-# - 保留 V44 的功能。
+# - 新增 "跳过确认弹窗 (危险!)" 复选框，选中后将自动确认清空、修改端口数、加载覆盖等操作。
+# - 关键错误提示（如名称冲突、端口无效）不受影响，仍会弹出。
+# - 保留 V46 的功能。
 
 import sys
 import tkinter as tk
@@ -21,6 +21,7 @@ import copy
 import json
 from collections import defaultdict
 import io
+import os
 import base64
 import datetime
 
@@ -29,12 +30,23 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QComboBox, QTextEdit,
     QTabWidget, QFrame, QFileDialog, QMessageBox, QSpacerItem, QSizePolicy,
     QGridLayout, QListWidgetItem, QAbstractItemView, QTableWidget, QTableWidgetItem,
-    QHeaderView, QListWidget, QSplitter
+    QHeaderView, QListWidget, QSplitter, QCheckBox # <-- 新增 QCheckBox
 )
 from PySide6.QtCore import Slot, Qt
 from PySide6.QtGui import QFont, QGuiApplication
+# --- 辅助函数 resource_path (用于打包后查找资源) ---
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，适用于开发环境和 PyInstaller 打包后 """
+    try:
+        # PyInstaller 创建一个临时文件夹并将路径存储在 _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        # 未打包状态下，获取当前脚本所在目录
+        base_path = os.path.abspath(os.path.dirname(__file__))
 
-# --- QSS 样式定义 (与 V44 相同) ---
+    return os.path.join(base_path, relative_path)
+
+# --- QSS 样式定义 ---
 APP_STYLE = """
 QMainWindow, QDialog, QMessageBox { }
 QFrame { background-color: transparent; }
@@ -61,7 +73,7 @@ QSplitter::handle:vertical { height: 3px; }
 QSplitter::handle:hover { background-color: #d0d0d0; }
 """
 
-# --- 用于数字排序的 QTableWidgetItem 子类 (与 V44 相同) ---
+# --- 用于数字排序的 QTableWidgetItem 子类 ---
 class NumericTableWidgetItem(QTableWidgetItem):
     """自定义 QTableWidgetItem 以支持数字排序。"""
     def __lt__(self, other):
@@ -72,73 +84,94 @@ class NumericTableWidgetItem(QTableWidgetItem):
             num_other = float(data_other)
             return num_self < num_other
         except (TypeError, ValueError):
+            # 如果转换失败，按字符串比较
             return super().__lt__(other)
 
-# --- 数据结构 (与 V44 相同) ---
+# --- 数据结构 ---
 class Device:
     """代表一个 MediorNet 设备"""
     def __init__(self, id, name, type, mpo_ports=0, lc_ports=0, sfp_ports=0):
         self.id = id
         self.name = name
         self.type = type
-        self.mpo_total = mpo_ports
-        self.lc_total = lc_ports
-        self.sfp_total = sfp_ports
+        self.mpo_total = int(mpo_ports) # 确保是整数
+        self.lc_total = int(lc_ports)   # 确保是整数
+        self.sfp_total = int(sfp_ports) # 确保是整数
         self.reset_ports()
 
     def reset_ports(self):
-        self.connections = 0.0
-        self.port_connections = {}
+        """重置端口连接状态和计数"""
+        self.connections = 0.0 # 使用浮点数以精确表示 MPO 连接 (0.25)
+        self.port_connections = {} # 字典：{ "端口名": "连接对端设备名" }
 
     def get_all_possible_ports(self):
+        """获取设备所有可能的端口名称列表"""
         ports = []
         ports.extend([f"LC{i+1}" for i in range(self.lc_total)])
         ports.extend([f"SFP{i+1}" for i in range(self.sfp_total)])
         for i in range(self.mpo_total):
             base = f"MPO{i+1}"
+            # MPO 端口有 4 个子通道 (Breakout)
             ports.extend([f"{base}-Ch{j+1}" for j in range(4)])
         return ports
 
     def get_all_available_ports(self):
+        """获取设备当前所有可用的端口名称列表"""
         all_ports = self.get_all_possible_ports()
         used_ports = set(self.port_connections.keys())
         available = [p for p in all_ports if p not in used_ports]
         return available
 
     def use_specific_port(self, port_name, target_device_name):
+        """标记指定端口为已使用，并连接到目标设备"""
         if port_name in self.get_all_possible_ports() and port_name not in self.port_connections:
             self.port_connections[port_name] = target_device_name
-            if port_name.startswith("MPO"): self.connections += 0.25
-            else: self.connections += 1
+            # 更新连接计数，MPO Breakout 算 0.25 个连接，其他算 1 个
+            if port_name.startswith("MPO"):
+                self.connections += 0.25
+            else:
+                self.connections += 1
             return True
         return False
 
     def return_port(self, port_name):
+        """释放指定端口，使其变为可用状态"""
         port_in_use_record = port_name in self.port_connections
         port_already_available = False
         port_type_valid = True
+
+        # 检查端口名格式是否有效
         if port_name.startswith("LC") or port_name.startswith("SFP") or (port_name.startswith("MPO") and "-Ch" in port_name):
              port_already_available = port_name in self.get_all_available_ports()
         else:
             print(f"警告: 尝试归还未知类型的端口 {port_name}")
             port_type_valid = False
-        if not port_type_valid: return
+
+        if not port_type_valid:
+            return
+
         if port_in_use_record:
-            target = self.port_connections.pop(port_name)
+            target = self.port_connections.pop(port_name) # 从已用端口中移除
+            # 只有当端口确实被移除（之前不在可用列表）时才减少连接计数
             if not port_already_available:
-                if port_name.startswith("MPO"): self.connections -= 0.25
-                elif port_name.startswith("LC") or port_name.startswith("SFP"): self.connections -= 1
-                self.connections = max(0.0, self.connections)
+                if port_name.startswith("MPO"):
+                    self.connections -= 0.25
+                elif port_name.startswith("LC") or port_name.startswith("SFP"):
+                    self.connections -= 1
+                self.connections = max(0.0, self.connections) # 确保不为负
         else:
+             # 如果端口本来就没被使用，则无需操作
              pass
 
     def get_available_port(self, port_type, target_device_name):
+        """获取指定类型的第一个可用端口并标记为已用（旧逻辑，可能不再需要）"""
         possible_ports = []
         if port_type == 'LC': possible_ports = [f"LC{i+1}" for i in range(self.lc_total)]
         elif port_type == 'MPO':
             for i in range(self.mpo_total): base = f"MPO{i+1}"; possible_ports.extend([f"{base}-Ch{j+1}" for j in range(4)])
-            random.shuffle(possible_ports)
+            random.shuffle(possible_ports) # 旧逻辑中包含随机性
         elif port_type == 'SFP': possible_ports = [f"SFP{i+1}" for i in range(self.sfp_total)]
+
         used_ports = set(self.port_connections.keys())
         for port in possible_ports:
             if port not in used_ports:
@@ -149,67 +182,83 @@ class Device:
         return None
 
     def get_specific_available_port(self, port_type_prefix):
+        """按顺序查找指定前缀的第一个可用端口（不标记为已用）"""
         possible_ports = []
         if port_type_prefix == 'LC': possible_ports = sorted([f"LC{i+1}" for i in range(self.lc_total)], key=lambda x: int(x[2:]))
         elif port_type_prefix == 'MPO':
             for i in range(self.mpo_total): base = f"MPO{i+1}"; possible_ports.extend(sorted([f"{base}-Ch{j+1}" for j in range(4)], key=lambda x: int(x.split('-Ch')[-1])))
         elif port_type_prefix == 'SFP': possible_ports = sorted([f"SFP{i+1}" for i in range(self.sfp_total)], key=lambda x: int(x[3:]))
+
         used_ports = set(self.port_connections.keys())
         for port in possible_ports:
-            if port not in used_ports: return port
+            if port not in used_ports:
+                return port
         return None
 
     def to_dict(self):
+        """将设备对象转换为字典，用于保存配置"""
         return {'id': self.id, 'name': self.name, 'type': self.type,
                 'mpo_ports': self.mpo_total, 'lc_ports': self.lc_total, 'sfp_ports': self.sfp_total}
 
     @classmethod
     def from_dict(cls, data):
+        """从字典创建设备对象，用于加载配置"""
+        # 提供默认 ID 以兼容旧格式
         data.setdefault('id', random.randint(10000, 99999))
         return cls(id=data['id'], name=data['name'], type=data['type'],
                    mpo_ports=data.get('mpo_ports', 0), lc_ports=data.get('lc_ports', 0), sfp_ports=data.get('sfp_ports', 0))
 
     def __repr__(self):
+        """返回对象的字符串表示形式"""
         return f"{self.name} ({self.type})"
 
-# --- 连接计算逻辑 (与 V44 相同) ---
+# --- 连接计算逻辑 ---
 
-# 端口兼容性检查辅助函数
 def check_port_compatibility(dev1_type, port1_name, dev2_type, port2_name):
-    """检查两个端口之间是否兼容"""
+    """检查两个端口之间是否兼容，并返回连接类型字符串"""
     port1_type = "LC" if port1_name.startswith("LC") else \
                  "SFP" if port1_name.startswith("SFP") else \
                  "MPO" if port1_name.startswith("MPO") else "Unknown"
     port2_type = "LC" if port2_name.startswith("LC") else \
                  "SFP" if port2_name.startswith("SFP") else \
                  "MPO" if port2_name.startswith("MPO") else "Unknown"
-    is_uhd1 = dev1_type in ['MicroN UHD', 'HorizoN']; is_uhd2 = dev2_type in ['MicroN UHD', 'HorizoN']
-    is_mn1 = dev1_type == 'MicroN'; is_mn2 = dev2_type == 'MicroN'
+
+    is_uhd1 = dev1_type in ['MicroN UHD', 'HorizoN']
+    is_uhd2 = dev2_type in ['MicroN UHD', 'HorizoN']
+    is_mn1 = dev1_type == 'MicroN'
+    is_mn2 = dev2_type == 'MicroN'
+
     if port1_type == "LC" and port2_type == "LC" and is_uhd1 and is_uhd2: return True, "LC-LC (100G)"
     if port1_type == "MPO" and port2_type == "MPO" and is_uhd1 and is_uhd2: return True, "MPO-MPO (25G)"
     if port1_type == "SFP" and port2_type == "SFP" and is_mn1 and is_mn2: return True, "SFP-SFP (10G)"
     if port1_type == "MPO" and port2_type == "SFP" and is_uhd1 and is_mn2: return True, "MPO-SFP (10G)"
-    if port1_type == "SFP" and port2_type == "MPO" and is_mn1 and is_uhd2: return True, "MPO-SFP (10G)"
+    if port1_type == "SFP" and port2_type == "MPO" and is_mn1 and is_uhd2: return True, "MPO-SFP (10G)" # 类型规范化
+
     return False, None
 
-# 获取兼容端口类型的辅助函数
 def _get_compatible_port_types(other_dev_type, other_port_name):
     """根据另一侧设备类型和端口，获取本侧设备兼容的端口类型列表"""
     other_port_type = "LC" if other_port_name.startswith("LC") else \
                       "SFP" if other_port_name.startswith("SFP") else \
                       "MPO" if other_port_name.startswith("MPO") else "Unknown"
     compatible_here = []
-    is_other_uhd = other_dev_type in ['MicroN UHD', 'HorizoN']; is_other_mn = other_dev_type == 'MicroN'
+    is_other_uhd = other_dev_type in ['MicroN UHD', 'HorizoN']
+    is_other_mn = other_dev_type == 'MicroN'
+
     if is_other_uhd:
         if other_port_type == 'LC': compatible_here = ['LC']
         elif other_port_type == 'MPO': compatible_here = ['MPO', 'SFP']
     elif is_other_mn:
         if other_port_type == 'SFP': compatible_here = ['MPO', 'SFP']
+
     return compatible_here
 
-# 查找最佳连接辅助函数
 def _find_best_single_link(dev1_copy, dev2_copy):
-    """辅助函数：查找两个设备副本之间最高优先级的单个可用连接。"""
+    """
+    辅助函数：查找两个设备副本之间最高优先级的单个可用连接。
+    返回 (port1, port2, conn_type) 或 (None, None, None)
+    如果找到连接，会直接在副本上调用 use_specific_port 消耗端口。
+    """
     if dev1_copy.type in ['MicroN UHD', 'HorizoN'] and dev2_copy.type in ['MicroN UHD', 'HorizoN']:
         port1 = dev1_copy.get_specific_available_port('LC')
         if port1:
@@ -238,7 +287,6 @@ def _find_best_single_link(dev1_copy, dev2_copy):
                 else: return port_micron, port_uhd, 'MPO-SFP (10G)'
     return None, None, None
 
-# Mesh 计算函数
 def calculate_mesh_connections(devices):
     """计算 Mesh 连接 - V34 改进版"""
     if len(devices) < 2: return [], {}
@@ -263,8 +311,7 @@ def calculate_mesh_connections(devices):
                     else: connections.append((original_dev2, port2, original_dev1, port1, conn_type))
                     connected_once_pairs.add(pair_key); made_progress_phase1 = True
                 else:
-                    if pair_key not in [fp[0] for fp in failed_pairs_phase1]:
-                        failed_pairs_phase1.append((pair_key, f"{original_dev1.name} <-> {original_dev2.name}"))
+                    if pair_key not in [fp[0] for fp in failed_pairs_phase1]: failed_pairs_phase1.append((pair_key, f"{original_dev1.name} <-> {original_dev2.name}"))
         if not made_progress_phase1: break
     if len(connected_once_pairs) < len(all_pairs_ids): print(f"警告: Phase 1 未能为所有设备对建立连接。失败 {len(all_pairs_ids) - len(connected_once_pairs)} 对。")
     print(f"Phase 1 完成. 建立了 {len(connections)} 条初始连接。")
@@ -284,7 +331,6 @@ def calculate_mesh_connections(devices):
     print(f"Phase 2 完成. 总连接数: {len(connections)}")
     return connections, device_map
 
-# 环形计算函数
 def calculate_ring_connections(devices):
     """计算环形连接，返回更详细的错误信息"""
     if len(devices) < 2: return [], {}, "设备数量少于2，无法形成环形"
@@ -315,7 +361,6 @@ def calculate_ring_connections(devices):
         print(f"警告: {error_message}")
     return connections, device_map, error_message
 
-# 内部 Mesh 填充辅助函数
 def _fill_connections_mesh_style(devices_current_state):
     """辅助函数：使用 Mesh 逻辑填充给定设备状态下的剩余连接。"""
     if len(devices_current_state) < 2: return []
@@ -338,7 +383,6 @@ def _fill_connections_mesh_style(devices_current_state):
                 connection_made_in_full_pass = True
     return new_connections
 
-# 内部 Ring 填充辅助函数
 def _fill_connections_ring_style(devices_current_state):
     """辅助函数：使用 Ring 逻辑填充给定设备状态下的剩余连接。"""
     if len(devices_current_state) < 2: return []
@@ -363,7 +407,7 @@ def _fill_connections_ring_style(devices_current_state):
 # --- 结束连接计算逻辑 ---
 
 
-# --- Matplotlib Canvas Widget (与 V44 相同) ---
+# --- Matplotlib Canvas Widget ---
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
@@ -373,16 +417,41 @@ class MplCanvas(FigureCanvas):
         FigureCanvas.setSizePolicy(self, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         FigureCanvas.updateGeometry(self)
 
-    # --- 修改：添加 port_totals_dict 参数 ---
     def plot_topology(self, devices, connections, layout_algorithm='spring', fixed_pos=None, selected_node_id=None, port_totals_dict=None):
-        """绘制拓扑图，支持节点高亮和显示端口总数""" # <--- 修改注释
+        """绘制拓扑图，支持节点高亮和显示端口总数"""
         self.axes.cla()
         if not devices: self.axes.text(0.5, 0.5, '无设备数据', ha='center', va='center'); self.draw(); return None, None
-        chinese_font_name = find_chinese_font(); font_prop = None; current_font_family = 'sans-serif'
-        if chinese_font_name:
-            try: plt.rcParams['font.sans-serif'] = [chinese_font_name] + plt.rcParams.get('font.sans-serif', []); font_prop = font_manager.FontProperties(family=chinese_font_name); current_font_family = chinese_font_name; plt.rcParams['axes.unicode_minus'] = False
-            except Exception as e: print(f"警告: 设置 Matplotlib 字体 '{chinese_font_name}' 失败: {e}"); chinese_font_name = None
-        if not chinese_font_name: plt.rcParams['font.sans-serif'] = ['sans-serif']; plt.rcParams['axes.unicode_minus'] = False; font_prop = font_manager.FontProperties(); current_font_family = 'sans-serif'
+
+        # 字体设置 (假设 find_chinese_font 和 resource_path 已定义并可用)
+        chinese_font_name = None # find_chinese_font() # 如果需要系统字体查找
+        font_prop = None; current_font_family = 'sans-serif'
+        try:
+            # 尝试加载打包字体
+            font_relative_path = os.path.join('assets', 'NotoSansCJKsc-Regular.otf')
+            font_path = resource_path(font_relative_path)
+            if os.path.exists(font_path):
+                font_manager.fontManager.addfont(font_path)
+                plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC'] + plt.rcParams.get('font.sans-serif', [])
+                font_prop = font_manager.FontProperties(family='Noto Sans CJK SC')
+                current_font_family = 'Noto Sans CJK SC'
+            else: # 回退
+                if chinese_font_name: # 如果定义了系统字体查找
+                     plt.rcParams['font.sans-serif'] = [chinese_font_name] + plt.rcParams.get('font.sans-serif', [])
+                     font_prop = font_manager.FontProperties(family=chinese_font_name)
+                     current_font_family = chinese_font_name
+                else: # 最终回退
+                     plt.rcParams['font.sans-serif'] = ['sans-serif']
+                     font_prop = font_manager.FontProperties()
+
+            plt.rcParams['axes.unicode_minus'] = False
+        except Exception as e:
+            print(f"设置 Matplotlib 字体时出错: {e}")
+            plt.rcParams['font.sans-serif'] = ['sans-serif']
+            plt.rcParams['axes.unicode_minus'] = False
+            font_prop = font_manager.FontProperties()
+            current_font_family = 'sans-serif'
+
+
         G = nx.Graph(); node_ids = [dev.id for dev in devices]; node_colors = []; node_labels = {}; node_alphas = []
         highlight_color = 'yellow'; default_alpha = 0.9; dimmed_alpha = 0.3
         for dev in devices:
@@ -450,14 +519,12 @@ class MplCanvas(FigureCanvas):
                  edge_label_colors[edge_key] = color
             nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7, ax=self.axes, label_pos=0.5, rotate=False, font_family=current_font_family, font_color=default_label_color)
 
-        # --- 新增：在图形上显示端口总数 ---
+        # 在图形上显示端口总数
         if port_totals_dict is not None:
             totals_text = f"端口总计: MPO: {port_totals_dict['mpo']}, LC: {port_totals_dict['lc']}, SFP+: {port_totals_dict['sfp']}"
-            # 在图形左下角添加文本 (使用图形坐标系)
             self.fig.text(0.01, 0.01, totals_text,
                           ha='left', va='bottom', fontsize=7, color='grey',
-                          transform=self.fig.transFigure) # 使用 Figure 坐标系
-        # --- 结束新增 ---
+                          transform=self.fig.transFigure)
 
         self.axes.set_title("网络连接拓扑图", fontproperties=font_prop); self.axes.axis('off')
         legend_elements = [
@@ -469,34 +536,20 @@ class MplCanvas(FigureCanvas):
         ]
         legend_prop_small = copy.copy(font_prop); legend_prop_small.set_size('small')
         self.axes.legend(handles=legend_elements, loc='best', prop=legend_prop_small)
-        # 调整布局以适应底部的文本
-        self.fig.tight_layout(rect=[0, 0.03, 1, 1]) # rect=[left, bottom, right, top]
+        self.fig.tight_layout(rect=[0, 0.03, 1, 1]) # 调整布局以适应底部的文本
         self.draw_idle()
         return self.fig, pos
 # --- 结束 Matplotlib Canvas ---
 
-# --- 辅助函数 (查找字体，与 V44 相同) ---
-def find_chinese_font():
-    font_names = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Heiti SC', 'STHeiti', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'sans-serif']
-    font_paths = font_manager.findSystemFonts(fontpaths=None, fontext='ttf')
-    found_fonts = {}
-    for font_path in font_paths:
-        try: prop = font_manager.FontProperties(fname=font_path); font_name = prop.get_name()
-        except RuntimeError: continue
-        except Exception: continue
-        if font_name in font_names and font_name not in found_fonts: found_fonts[font_name] = font_path
-    for name in ['PingFang SC', 'Microsoft YaHei', 'SimHei']:
-         if name in found_fonts: return name
-    for name in font_names:
-        if name in found_fonts: return name
-    print("警告: 未找到特定中文字体。")
-    return None
+# --- 辅助函数 (查找字体) ---
+# (如果需要系统字体查找，保留此函数)
+# def find_chinese_font(): ...
 
-# --- 主窗口 ---
+# --- 主窗口 (MainWindow Class - Modified) ---
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V1.01 -- By Vega Sun") # <--- 版本号更新
+        self.setWindowTitle("MediorNet TDM 连接计算器 V47") # <--- 版本号更新
         self.setGeometry(100, 100, 1100, 800)
         self.devices = []
         self.connections_result = []
@@ -508,11 +561,20 @@ class MainWindow(QMainWindow):
         self.drag_offset = (0, 0)
         self.connecting_node_id = None
         self.connection_line = None
-        font_families = []; os_system = platform.system()
-        if os_system == "Windows": font_families.extend(["Microsoft YaHei", "SimHei"])
-        elif os_system == "Darwin": font_families.append("PingFang SC")
-        font_families.extend(["Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])
-        self.chinese_font = QFont(); self.chinese_font.setFamilies(font_families); self.chinese_font.setPointSize(10)
+        self.suppress_confirmations = False # <-- 新增状态变量
+        # 字体加载 (与 V45 相同, 依赖 resource_path)
+        try:
+            font_relative_path = os.path.join('assets', 'NotoSansCJKsc-Regular.otf')
+            font_path = resource_path(font_relative_path)
+            if os.path.exists(font_path):
+                font_manager.fontManager.addfont(font_path)
+                plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC'] + plt.rcParams['font.sans-serif']
+                print(f"成功加载并设置打包字体: Noto Sans CJK SC (路径: {font_path})")
+            else: print(f"警告: 未在路径 {font_path} 找到打包的字体文件。"); plt.rcParams['font.sans-serif'] = ['sans-serif']
+        except Exception as e: print(f"加载或设置打包字体时出错: {e}"); plt.rcParams['font.sans-serif'] = ['sans-serif']
+        plt.rcParams['axes.unicode_minus'] = False
+        self.chinese_font = QFont("Noto Sans CJK SC", 10) # 假设字体加载成功
+
         # --- 主布局与控件 ---
         main_widget = QWidget(); self.setCentralWidget(main_widget); main_layout = QHBoxLayout(main_widget)
         main_splitter = QSplitter(Qt.Orientation.Horizontal); main_layout.addWidget(main_splitter)
@@ -530,22 +592,37 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(add_group)
         list_group = QFrame(); list_group.setObjectName("listGroup"); list_group_layout = QVBoxLayout(list_group); list_group_layout.setContentsMargins(10, 15, 10, 10)
         filter_layout = QHBoxLayout(); filter_layout.addWidget(QLabel("过滤:", font=self.chinese_font)); self.device_filter_entry = QLineEdit(); self.device_filter_entry.setFont(self.chinese_font); self.device_filter_entry.setPlaceholderText("按名称或类型过滤..."); self.device_filter_entry.textChanged.connect(self.filter_device_table); filter_layout.addWidget(self.device_filter_entry); list_group_layout.addLayout(filter_layout)
-        self.device_tablewidget = QTableWidget(); self.device_tablewidget.setFont(self.chinese_font); self.device_tablewidget.setColumnCount(6); self.device_tablewidget.setHorizontalHeaderLabels(["名称", "类型", "MPO", "LC", "SFP+", "连接数(估)"]); self.device_tablewidget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows); self.device_tablewidget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection); self.device_tablewidget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);
+        self.device_tablewidget = QTableWidget(); self.device_tablewidget.setFont(self.chinese_font); self.device_tablewidget.setColumnCount(6); self.device_tablewidget.setHorizontalHeaderLabels(["名称", "类型", "MPO", "LC", "SFP+", "连接数(估)"]); self.device_tablewidget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows); self.device_tablewidget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection);
+        # --- 修改：允许编辑 ---
+        self.device_tablewidget.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked |
+            QAbstractItemView.EditTrigger.SelectedClicked |
+            QAbstractItemView.EditTrigger.EditKeyPressed
+        )
+        # --- 结束修改 ---
         self.device_tablewidget.setSortingEnabled(True)
         header = self.device_tablewidget.horizontalHeader(); header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive); header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.device_tablewidget.setColumnWidth(1, 90); self.device_tablewidget.setColumnWidth(2, 50); self.device_tablewidget.setColumnWidth(3, 50); self.device_tablewidget.setColumnWidth(4, 50); self.device_tablewidget.setColumnWidth(5, 80)
-        self.device_tablewidget.itemDoubleClicked.connect(self.show_device_details_from_table); list_group_layout.addWidget(self.device_tablewidget)
-        device_op_layout = QHBoxLayout(); self.remove_button = QPushButton("移除选中"); self.remove_button.setFont(self.chinese_font); self.remove_button.clicked.connect(self.remove_device); self.clear_button = QPushButton("清空所有"); self.clear_button.setFont(self.chinese_font); self.clear_button.clicked.connect(self.clear_all_devices); device_op_layout.addWidget(self.remove_button); device_op_layout.addWidget(self.clear_button); list_group_layout.addLayout(device_op_layout)
-        # --- 新增：端口总数标签 ---
-        self.port_totals_label = QLabel("总计: MPO: 0, LC: 0, SFP+: 0")
-        font = self.port_totals_label.font(); font.setBold(True)
-        self.port_totals_label.setFont(font)
-        self.port_totals_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.port_totals_label.setStyleSheet("padding-top: 5px; padding-right: 5px;") # 添加一些内边距
-        list_group_layout.addWidget(self.port_totals_label) # 添加到设备列表组布局中
+        self.device_tablewidget.itemDoubleClicked.connect(self.show_device_details_from_table)
+        # --- 新增：连接 itemChanged 信号 ---
+        self.device_tablewidget.itemChanged.connect(self.on_device_item_changed)
         # --- 结束新增 ---
+        list_group_layout.addWidget(self.device_tablewidget)
+        device_op_layout = QHBoxLayout(); self.remove_button = QPushButton("移除选中"); self.remove_button.setFont(self.chinese_font); self.remove_button.clicked.connect(self.remove_device); self.clear_button = QPushButton("清空所有"); self.clear_button.setFont(self.chinese_font); self.clear_button.clicked.connect(self.clear_all_devices); device_op_layout.addWidget(self.remove_button); device_op_layout.addWidget(self.clear_button); list_group_layout.addLayout(device_op_layout)
+        self.port_totals_label = QLabel("总计: MPO: 0, LC: 0, SFP+: 0"); font = self.port_totals_label.font(); font.setBold(True); self.port_totals_label.setFont(font); self.port_totals_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter); self.port_totals_label.setStyleSheet("padding-top: 5px; padding-right: 5px;"); list_group_layout.addWidget(self.port_totals_label)
         left_layout.addWidget(list_group)
         file_group = QFrame(); file_group.setObjectName("fileGroup"); file_group_layout = QGridLayout(file_group); file_group_layout.setContentsMargins(10, 15, 10, 10); file_title = QLabel("<b>文件操作</b>"); file_title.setFont(QFont(self.chinese_font.family(), 11)); file_group_layout.addWidget(file_title, 0, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
+        # --- 新增: 跳过确认弹窗设置 ---
+        suppress_frame = QFrame()
+        # suppress_frame.setObjectName("suppressGroup") # 可选，如果需要单独样式
+        suppress_frame.setFrameShape(QFrame.Shape.NoFrame) # 无边框
+        suppress_layout = QHBoxLayout(suppress_frame); suppress_layout.setContentsMargins(10, 0, 10, 5) # 调整边距
+        self.suppress_confirm_checkbox = QCheckBox("跳过确认弹窗")
+        self.suppress_confirm_checkbox.setFont(self.chinese_font)
+        self.suppress_confirm_checkbox.stateChanged.connect(self._toggle_suppress_confirmations)
+        suppress_layout.addWidget(self.suppress_confirm_checkbox)
+        suppress_layout.addStretch() # Push checkbox to the left
+        left_layout.addWidget(suppress_frame) # 添加到文件组下方
         self.save_button = QPushButton("保存配置"); self.save_button.setFont(self.chinese_font); self.save_button.clicked.connect(self.save_config); self.load_button = QPushButton("加载配置"); self.load_button.setFont(self.chinese_font); self.load_button.clicked.connect(self.load_config); file_group_layout.addWidget(self.save_button, 1, 0); file_group_layout.addWidget(self.load_button, 1, 1)
         self.export_list_button = QPushButton("导出列表"); self.export_list_button.setFont(self.chinese_font); self.export_list_button.clicked.connect(self.export_connections); self.export_list_button.setEnabled(False); file_group_layout.addWidget(self.export_list_button, 2, 0)
         self.export_topo_button = QPushButton("导出拓扑图"); self.export_topo_button.setFont(self.chinese_font); self.export_topo_button.clicked.connect(self.export_topology); self.export_topo_button.setEnabled(False); file_group_layout.addWidget(self.export_topo_button, 2, 1)
@@ -600,7 +677,7 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([400, 700])
         main_splitter.setStretchFactor(1, 1)
         self.update_port_entries()
-        self._update_port_totals_display() # <-- 初始更新总数
+        self._update_port_totals_display()
         self._update_connection_views()
 
     # --- 方法 ---
@@ -613,17 +690,152 @@ class MainWindow(QMainWindow):
         self.sfp_label.setVisible(is_micron); self.sfp_entry.setVisible(is_micron)
 
     def _add_device_to_table(self, device):
-        row_position = self.device_tablewidget.rowCount(); self.device_tablewidget.insertRow(row_position)
-        name_item = QTableWidgetItem(device.name); name_item.setData(Qt.ItemDataRole.UserRole, device.id)
+        """将设备对象添加到表格中，并设置可编辑标志"""
+        row_position = self.device_tablewidget.rowCount()
+        self.device_tablewidget.insertRow(row_position)
+
+        # --- 设置 Item Flags ---
+        editable_flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
+        non_editable_flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+        # ---
+
+        name_item = QTableWidgetItem(device.name)
+        name_item.setData(Qt.ItemDataRole.UserRole, device.id)
+        name_item.setFlags(editable_flags) # 名称可编辑
+
         type_item = QTableWidgetItem(device.type)
-        mpo_item = NumericTableWidgetItem(str(device.mpo_total)); mpo_item.setData(Qt.ItemDataRole.UserRole + 1, device.mpo_total); mpo_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        lc_item = NumericTableWidgetItem(str(device.lc_total)); lc_item.setData(Qt.ItemDataRole.UserRole + 1, device.lc_total); lc_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        sfp_item = NumericTableWidgetItem(str(device.sfp_total)); sfp_item.setData(Qt.ItemDataRole.UserRole + 1, device.sfp_total); sfp_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        type_item.setFlags(non_editable_flags) # 类型不可编辑
+
+        mpo_item = NumericTableWidgetItem(str(device.mpo_total))
+        mpo_item.setData(Qt.ItemDataRole.UserRole + 1, device.mpo_total)
+        mpo_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        mpo_item.setFlags(editable_flags if device.type in ['MicroN UHD', 'HorizoN'] else non_editable_flags) # MPO 可编辑 (仅 UHD/HorizoN)
+
+        lc_item = NumericTableWidgetItem(str(device.lc_total))
+        lc_item.setData(Qt.ItemDataRole.UserRole + 1, device.lc_total)
+        lc_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        lc_item.setFlags(editable_flags if device.type in ['MicroN UHD', 'HorizoN'] else non_editable_flags) # LC 可编辑 (仅 UHD/HorizoN)
+
+        sfp_item = NumericTableWidgetItem(str(device.sfp_total))
+        sfp_item.setData(Qt.ItemDataRole.UserRole + 1, device.sfp_total)
+        sfp_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        sfp_item.setFlags(editable_flags if device.type == 'MicroN' else non_editable_flags) # SFP+ 可编辑 (仅 MicroN)
+
         conn_val = float(f"{device.connections:.2f}")
-        conn_item = NumericTableWidgetItem(f"{conn_val:.2f}"); conn_item.setData(Qt.ItemDataRole.UserRole + 1, conn_val); conn_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.device_tablewidget.setItem(row_position, 0, name_item); self.device_tablewidget.setItem(row_position, 1, type_item)
-        self.device_tablewidget.setItem(row_position, 2, mpo_item); self.device_tablewidget.setItem(row_position, 3, lc_item)
-        self.device_tablewidget.setItem(row_position, 4, sfp_item); self.device_tablewidget.setItem(row_position, 5, conn_item)
+        conn_item = NumericTableWidgetItem(f"{conn_val:.2f}")
+        conn_item.setData(Qt.ItemDataRole.UserRole + 1, conn_val)
+        conn_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        conn_item.setFlags(non_editable_flags) # 连接数不可编辑
+
+        self.device_tablewidget.setItem(row_position, 0, name_item)
+        self.device_tablewidget.setItem(row_position, 1, type_item)
+        self.device_tablewidget.setItem(row_position, 2, mpo_item)
+        self.device_tablewidget.setItem(row_position, 3, lc_item)
+        self.device_tablewidget.setItem(row_position, 4, sfp_item)
+        self.device_tablewidget.setItem(row_position, 5, conn_item)
+    
+    # --- 新增：处理跳过确认的槽函数 ---
+    @Slot(int)
+    def _toggle_suppress_confirmations(self, state):
+        """更新是否跳过确认弹窗的状态"""
+        self.suppress_confirmations = (state == Qt.CheckState.Checked.value)
+        print(f"跳过确认弹窗: {'已启用' if self.suppress_confirmations else '已禁用'}")
+    # --- 结束新增 ---
+
+    # --- 新增：处理表格项编辑的槽函数 ---
+    @Slot(QTableWidgetItem)
+    def on_device_item_changed(self, item):
+        """处理设备表格中项目被编辑后的事件"""
+        if not item: return
+
+        row = item.row()
+        col = item.column()
+        name_item = self.device_tablewidget.item(row, 0)
+        if not name_item: return # 无法获取设备 ID
+
+        dev_id = name_item.data(Qt.ItemDataRole.UserRole)
+        device = next((d for d in self.devices if d.id == dev_id), None)
+        if not device: return # 找不到设备对象
+
+        new_value = item.text().strip()
+        self.device_tablewidget.blockSignals(True) # 阻止信号递归
+
+        try:
+            if col == 0: # 名称列
+                old_name = device.name
+                if not new_value:
+                    QMessageBox.warning(self, "输入错误", "设备名称不能为空。")
+                    item.setText(old_name)
+                elif new_value != old_name and any(d.name == new_value for d in self.devices if d.id != dev_id):
+                    QMessageBox.warning(self, "输入错误", f"设备名称 '{new_value}' 已存在。")
+                    item.setText(old_name)
+                elif new_value != old_name:
+                    print(f"设备 '{old_name}' 重命名为 '{new_value}'")
+                    device.name = new_value
+                    # 更新其他设备 port_connections 中的引用
+                    for other_dev in self.devices:
+                        if other_dev.id != device.id:
+                            ports_to_update = {p: new_value for p, target in other_dev.port_connections.items() if target == old_name}
+                            other_dev.port_connections.update(ports_to_update)
+                    # 更新 UI
+                    self._update_device_combos()
+                    self._update_connection_views() # 重绘拓扑图以更新标签
+            elif col in [2, 3, 4]: # 端口数列 (MPO=2, LC=3, SFP+=4)
+                port_attr_map = {2: 'mpo_total', 3: 'lc_total', 4: 'sfp_total'}
+                port_name_map = {2: 'MPO', 3: 'LC', 4: 'SFP+'}
+                attr_name = port_attr_map.get(col)
+                port_type_name = port_name_map.get(col)
+
+                # 检查编辑的端口类型是否适用于当前设备类型
+                is_uhd_horizon = device.type in ['MicroN UHD', 'HorizoN']
+                is_micron = device.type == 'MicroN'
+                can_edit_this_port = (attr_name in ['mpo_total', 'lc_total'] and is_uhd_horizon) or \
+                                     (attr_name == 'sfp_total' and is_micron)
+
+                if not can_edit_this_port:
+                     old_count = getattr(device, attr_name, 0)
+                     print(f"不允许修改设备类型 '{device.type}' 的 '{port_type_name}' 端口数量。")
+                     item.setText(str(old_count)) # 恢复原值
+                     self.device_tablewidget.blockSignals(False)
+                     return # 直接返回
+
+                old_count = getattr(device, attr_name, 0)
+                try:
+                    new_count = int(new_value)
+                    if new_count < 0: raise ValueError("端口数不能为负")
+
+                    if new_count != old_count:
+                        # --- 修改：检查是否跳过确认 ---
+                        user_confirmed_port_change = True # 默认同意（如果跳过）
+                        if not self.suppress_confirmations:
+                            reply = QMessageBox.question(self, "确认修改端口数量",
+                                                         f"修改设备 '{device.name}' 的 {port_type_name} 端口数量将清除所有现有连接并可能需要重新计算布局。\n是否继续？",
+                                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                                         QMessageBox.StandardButton.No)
+                            user_confirmed_port_change = (reply == QMessageBox.StandardButton.Yes)
+                        # --- 结束修改 ---
+
+                        if user_confirmed_port_change:
+                            print(f"设备 '{device.name}' 的 {attr_name} 从 {old_count} 修改为 {new_count}")
+                            setattr(device, attr_name, new_count)
+                            # 清除连接并更新所有相关 UI
+                            self.clear_results() # 会调用 _update_connection_views
+                            self._update_port_totals_display()
+                            self._update_manual_port_options() # 端口数变化影响可用端口
+                            # self._update_connection_views() # clear_results 内部会调用
+                        else:
+                            print("用户取消修改端口数量。")
+                            item.setText(str(old_count)) # 用户取消，恢复原值
+                    # else: 值未改变，无需操作
+
+                except ValueError:
+                    QMessageBox.warning(self, "输入错误", f"{port_type_name} 端口数量必须是非负整数。")
+                    item.setText(str(old_count)) # 恢复原值
+        finally:
+            self.device_tablewidget.blockSignals(False) # 恢复信号
+    # --- 结束新增 ---
+
+    # --- 结束新增 ---
 
     def _update_device_combos(self):
         """更新手动编辑区域的设备下拉框 (并触发端口更新)"""
@@ -711,7 +923,6 @@ class MainWindow(QMainWindow):
             self.edit_dev1_combo, self.edit_port1_combo
         )
 
-    # --- 新增：计算端口总数 ---
     def _calculate_port_totals(self):
         """计算当前设备列表中各类端口的总数"""
         total_mpo = sum(dev.mpo_total for dev in self.devices)
@@ -719,7 +930,6 @@ class MainWindow(QMainWindow):
         total_sfp = sum(dev.sfp_total for dev in self.devices)
         return {'mpo': total_mpo, 'lc': total_lc, 'sfp': total_sfp}
 
-    # --- 新增：更新端口总数显示 ---
     def _update_port_totals_display(self):
         """更新显示端口总数的标签"""
         totals = self._calculate_port_totals()
@@ -740,10 +950,10 @@ class MainWindow(QMainWindow):
         self.device_id_counter += 1
         new_device = Device(self.device_id_counter, name, dtype, mpo_ports, lc_ports, sfp_ports)
         self.devices.append(new_device); self._add_device_to_table(new_device); self.device_name_entry.clear();
-        self._update_device_combos(); self.clear_results() # clear_results 会调用 _update_connection_views
+        self._update_device_combos(); self.clear_results()
         self.node_positions = None; self.selected_node_id = None
-        self._update_port_totals_display() # <-- 更新总数
-        # _update_connection_views() # <-- V44: 已在 clear_results 中调用
+        self._update_port_totals_display()
+        self._update_connection_views()
 
     @Slot()
     def remove_device(self):
@@ -761,19 +971,30 @@ class MainWindow(QMainWindow):
                  try: self.connections_result.remove(conn)
                  except ValueError: self.connections_result = [c for c in self.connections_result if not (c[0].id == conn[0].id and c[2].id == conn[2].id and c[1] == conn[1] and c[3] == conn[3])]
         for row_index in selected_rows: self.device_tablewidget.removeRow(row_index)
-        self._update_device_combos(); self.clear_results() # clear_results 会调用 _update_connection_views
+        self._update_device_combos(); self.clear_results()
         self.node_positions = None; self.selected_node_id = None
-        self._update_port_totals_display() # <-- 更新总数
-        # _update_connection_views() # <-- V44: 已在 clear_results 中调用
+        self._update_port_totals_display()
+        self._update_connection_views()
 
     @Slot()
     def clear_all_devices(self):
-        if QMessageBox.question(self, "确认", "确定要清空所有设备吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+        # --- 修改：检查跳过确认 ---
+        user_confirmed = True # 默认同意
+        if not self.suppress_confirmations:
+            reply = QMessageBox.question(self, "确认", "确定要清空所有设备吗？",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                         QMessageBox.StandardButton.No)
+            user_confirmed = (reply == QMessageBox.StandardButton.Yes)
+        # --- 结束修改 ---
+
+        if user_confirmed:
             self.devices = []; self.device_tablewidget.setRowCount(0); self.device_id_counter = 0;
-            self._update_device_combos(); self.clear_results() # clear_results 会调用 _update_connection_views
+            self._update_device_combos(); self.clear_results()
             self.node_positions = None; self.selected_node_id = None
-            self._update_port_totals_display() # <-- 更新总数
-            # _update_connection_views() # <-- V44: 已在 clear_results 中调用
+            self._update_port_totals_display()
+            # self._update_connection_views() # 由 clear_results 调用
+        else:
+            print("用户取消清空所有设备。")
 
     @Slot()
     def clear_results(self):
@@ -787,7 +1008,7 @@ class MainWindow(QMainWindow):
         self.fill_mesh_button.setEnabled(False); self.fill_ring_button.setEnabled(False)
         for dev in self.devices: dev.reset_ports()
         self._update_device_table_connections()
-        self._update_port_totals_display() # <-- 更新总数
+        self._update_port_totals_display() # 更新总数显示
         self._update_connection_views()
 
     @Slot(QTableWidgetItem)
@@ -1049,7 +1270,19 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def load_config(self):
-        if self.devices and QMessageBox.question(self, "确认", "加载配置将覆盖当前设备列表，确定吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.No: return
+        # --- 修改：检查跳过确认 ---
+        user_confirmed_load = True # 默认同意
+        if self.devices: # 仅当列表非空时才询问
+            if not self.suppress_confirmations:
+                reply = QMessageBox.question(self, "确认", "加载配置将覆盖当前设备列表，确定吗？",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                             QMessageBox.StandardButton.No)
+                user_confirmed_load = (reply == QMessageBox.StandardButton.Yes)
+
+        if not user_confirmed_load:
+            print("用户取消加载配置。")
+            return
+        # --- 结束修改 ---
         filepath, _ = QFileDialog.getOpenFileName(self, "加载设备配置", "", "JSON 文件 (*.json);;所有文件 (*)")
         if not filepath: return
         try:
@@ -1097,8 +1330,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def export_html_report(self):
         """导出包含拓扑图和连接列表的 HTML 报告"""
-        if not self.connections_result or not self.mpl_canvas.fig:
-            QMessageBox.warning(self, "无法导出", "请先计算连接并生成拓扑图。")
+        if not self.devices or not self.mpl_canvas.fig:
+            QMessageBox.warning(self, "无法导出", "请先添加设备并生成拓扑图（可能需要计算连接）。")
             return
         filepath, _ = QFileDialog.getSaveFileName(self, "导出 HTML 报告", "", "HTML 文件 (*.html);;所有文件 (*)")
         if not filepath: return
@@ -1109,48 +1342,25 @@ class MainWindow(QMainWindow):
             image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
             img_data_uri = f"data:image/png;base64,{image_base64}"
             connections_html = """
-            <div class="mt-8">
-                <h2 class="text-lg font-semibold mb-3">连接列表</h2>
-                <div class="overflow-x-auto bg-white rounded-lg shadow">
-                    <table class="min-w-full leading-normal">
-                        <thead>
-                            <tr>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">序号</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 1</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 1</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 2</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 2</th>
-                                <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">类型</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+            <div class="mt-8"> <h2 class="text-lg font-semibold mb-3">连接列表</h2> <div class="overflow-x-auto bg-white rounded-lg shadow">
+            <table class="min-w-full leading-normal"> <thead> <tr>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">序号</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 1</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 1</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">设备 2</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">端口 2</th>
+            <th class="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">类型</th>
+            </tr> </thead> <tbody>
             """
             if self.connections_result:
                 for i, conn in enumerate(self.connections_result):
                     dev1, port1, dev2, port2, conn_type = conn
                     bg_class = "bg-white" if i % 2 == 0 else "bg-gray-50"
                     connections_html += f"""
-                            <tr class="{bg_class}">
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{i+1}</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev1.name} ({dev1.type})</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{port1}</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev2.name} ({dev2.type})</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{port2}</td>
-                                <td class="px-5 py-4 border-b border-gray-200 text-sm">{conn_type}</td>
-                            </tr>
+                            <tr class="{bg_class}"> <td class="px-5 py-4 border-b border-gray-200 text-sm">{i+1}</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev1.name} ({dev1.type})</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{port1}</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{dev2.name} ({dev2.type})</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{port2}</td> <td class="px-5 py-4 border-b border-gray-200 text-sm">{conn_type}</td> </tr>
                     """
-            else:
-                connections_html += """
-                            <tr>
-                                <td colspan="6" class="px-5 py-5 border-b border-gray-200 bg-white text-center text-sm text-gray-500">无连接</td>
-                            </tr>
-                """
-            connections_html += """
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            """
+            else: connections_html += """ <tr> <td colspan="6" class="px-5 py-5 border-b border-gray-200 bg-white text-center text-sm text-gray-500">无连接</td> </tr> """
+            connections_html += """ </tbody> </table> </div> </div> """
             html_content = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -1265,6 +1475,7 @@ class MainWindow(QMainWindow):
                     self.selected_node_id = None
                     print("清除选中 (点击背景)")
                     self._update_connection_views()
+
 
     @Slot(object)
     def on_canvas_motion(self, event):
