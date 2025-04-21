@@ -5,7 +5,6 @@ name: Build Windows & macOS Executables & Release
 # 控制工作流触发的时机
 on:
   push:
-    branches: [ main ]  # 当代码推送到 main 分支时触发 (用于测试构建)
     tags:
       - 'v*' # 当创建 v 开头的标签时触发 (用于发布 Release)
   workflow_dispatch:      # 允许手动从 GitHub Actions 页面触发
