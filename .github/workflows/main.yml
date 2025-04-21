@@ -50,7 +50,8 @@ jobs:
             --onefile `
             --windowed `
             --paths . `                     # <-- Added: Tell PyInstaller to search for modules in the current directory
-            --add-data "assets;assets"      # <-- Added: Bundle the assets folder (Windows separator is ;)
+            --add-data "./utils/assets:assets"      # <-- Added: Bundle the assets folder (Windows separator is ;)
+            --icon=./utils/assets/tdmc.ico
         shell: pwsh
 
       - name: Upload Windows Artifact
@@ -93,7 +94,7 @@ jobs:
             --onefile \
             --windowed \
             --paths . \                     # <-- Added: Tell PyInstaller to search for modules in the current directory
-            --add-data "assets:assets"      # <-- Added: Bundle the assets folder (macOS/Linux separator is :)
+            --add-data "./utils/assets:assets"      # <-- Added: Bundle the assets folder (macOS/Linux separator is :)
 
       - name: Zip .app bundle (arm64)
         # Ensure the .app bundle exists before zipping
