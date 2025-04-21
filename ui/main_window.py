@@ -181,7 +181,35 @@ class MainWindow(QMainWindow):
         self.connections_tab = QWidget(); connections_layout = QVBoxLayout(self.connections_tab); self.connections_textedit = QTextEdit(); self.connections_textedit.setFont(self.chinese_font); self.connections_textedit.setReadOnly(True); connections_layout.addWidget(self.connections_textedit); self.tab_widget.addTab(self.connections_tab, "连接列表")
         self.topology_tab = QWidget(); topology_layout = QVBoxLayout(self.topology_tab)
         self.mpl_canvas.setParent(self.topology_tab); topology_layout.addWidget(self.mpl_canvas); self.tab_widget.addTab(self.topology_tab, "拓扑图")
-        # !! 注意: 画布事件连接已移至 _connect_controller_signals !!
+
+        # !! 添加调试代码: 检查实例和方法 !!
+        print("-" * 20)
+        print(f"DEBUG: Checking instances before connecting mpl signals...")
+        print(f"DEBUG: self.mpl_canvas type: {type(self.mpl_canvas)}")
+        print(f"DEBUG: self.topology_controller type: {type(self.topology_controller)}")
+        try:
+            print(f"DEBUG: self.topology_controller.on_canvas_press: {self.topology_controller.on_canvas_press}")
+        except AttributeError:
+            print("DEBUG: self.topology_controller has NO on_canvas_press attribute!")
+        print("-" * 20)
+
+        # !! 包裹 mpl_connect 调用以捕获错误 !!
+        try:
+            cid_press = self.mpl_canvas.mpl_connect('button_press_event', self.topology_controller.on_canvas_press)
+            cid_motion = self.mpl_canvas.mpl_connect('motion_notify_event', self.topology_controller.on_canvas_motion)
+            cid_release = self.mpl_canvas.mpl_connect('button_release_event', self.topology_controller.on_canvas_release)
+            print(f"DEBUG: mpl_connect calls executed. CIDs: {cid_press}, {cid_motion}, {cid_release}")
+        except Exception as e:
+            print(f"!!! 严重错误: mpl_connect 失败: {e} !!!")
+            QMessageBox.critical(self, "错误", f"无法连接画布事件处理器: {e}")
+
+        # !! 添加调试用的事件处理器 !!
+        def _debug_mpl_event(event):
+            print(f"DEBUG (MainWindow): Matplotlib event received: {event.name}, button={event.button}, xdata={event.xdata}, ydata={event.ydata}")
+        self._debug_event_cid = self.mpl_canvas.mpl_connect('button_press_event', _debug_mpl_event)
+        print(f"DEBUG (MainWindow): Connected debug handler with ID: {self._debug_event_cid}")
+        # --------------------------
+
         self.edit_tab = QWidget(); edit_main_layout = QVBoxLayout(self.edit_tab); add_manual_group = QFrame(); add_manual_group.setObjectName("addManualGroup"); add_manual_group.setFrameShape(QFrame.Shape.StyledPanel); add_manual_layout = QGridLayout(add_manual_group); add_manual_layout.setContentsMargins(10,10,10,10); add_manual_layout.addWidget(QLabel("<b>添加手动连接</b>", font=self.chinese_font), 0, 0, 1, 4, alignment=Qt.AlignmentFlag.AlignCenter); add_manual_layout.addWidget(QLabel("设备 1:", font=self.chinese_font), 1, 0); self.edit_dev1_combo = QComboBox(); self.edit_dev1_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_dev1_combo, 1, 1); add_manual_layout.addWidget(QLabel("端口 1:", font=self.chinese_font), 1, 2); self.edit_port1_combo = QComboBox(); self.edit_port1_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_port1_combo, 1, 3); add_manual_layout.addWidget(QLabel("设备 2:", font=self.chinese_font), 2, 0); self.edit_dev2_combo = QComboBox(); self.edit_dev2_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_dev2_combo, 2, 1); add_manual_layout.addWidget(QLabel("端口 2:", font=self.chinese_font), 2, 2); self.edit_port2_combo = QComboBox(); self.edit_port2_combo.setFont(self.chinese_font); add_manual_layout.addWidget(self.edit_port2_combo, 2, 3); self.add_manual_button = QPushButton("添加连接"); self.add_manual_button.setFont(self.chinese_font); self.add_manual_button.clicked.connect(self.add_manual_connection); add_manual_layout.addWidget(self.add_manual_button, 3, 0, 1, 4, alignment=Qt.AlignmentFlag.AlignCenter); self.edit_dev1_combo.currentIndexChanged.connect(self._update_manual_port_options); self.edit_port1_combo.currentIndexChanged.connect(self._update_manual_port_options); self.edit_dev2_combo.currentIndexChanged.connect(self._update_manual_port_options); self.edit_port2_combo.currentIndexChanged.connect(self._update_manual_port_options); edit_main_layout.addWidget(add_manual_group); remove_manual_group = QFrame(); remove_manual_group.setObjectName("removeManualGroup"); remove_manual_group.setFrameShape(QFrame.Shape.StyledPanel); remove_manual_layout = QVBoxLayout(remove_manual_group); remove_manual_layout.setContentsMargins(10,10,10,10); remove_title = QLabel("<b>移除现有连接</b> (选中下方列表中的连接进行移除)"); remove_title.setFont(self.chinese_font); remove_manual_layout.addWidget(remove_title); filter_conn_layout = QHBoxLayout(); filter_conn_layout.addWidget(QLabel("类型过滤:", font=self.chinese_font)); self.conn_filter_type_combo = QComboBox(); self.conn_filter_type_combo.setFont(self.chinese_font); self.conn_filter_type_combo.addItems(["所有类型", "LC-LC (100G)", "MPO-MPO (25G)", "SFP-SFP (10G)", "MPO-SFP (10G)"]); self.conn_filter_type_combo.currentIndexChanged.connect(self.filter_connection_list); filter_conn_layout.addWidget(self.conn_filter_type_combo); filter_conn_layout.addSpacing(15); filter_conn_layout.addWidget(QLabel("设备过滤:", font=self.chinese_font)); self.conn_filter_device_entry = QLineEdit(); self.conn_filter_device_entry.setFont(self.chinese_font); self.conn_filter_device_entry.setPlaceholderText("按设备名称过滤..."); self.conn_filter_device_entry.textChanged.connect(self.filter_connection_list); filter_conn_layout.addWidget(self.conn_filter_device_entry); remove_manual_layout.insertLayout(1, filter_conn_layout); self.manual_connection_list = QListWidget(); self.manual_connection_list.setFont(self.chinese_font); self.manual_connection_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection); remove_manual_layout.addWidget(self.manual_connection_list); self.remove_manual_button = QPushButton("移除选中连接"); self.remove_manual_button.setFont(self.chinese_font); self.remove_manual_button.clicked.connect(self.remove_manual_connection); self.remove_manual_button.setEnabled(False); remove_manual_layout.addWidget(self.remove_manual_button, alignment=Qt.AlignmentFlag.AlignCenter); edit_main_layout.addWidget(remove_manual_group)
         self.tab_widget.addTab(self.edit_tab, "手动编辑")
         main_splitter.setSizes([400, 700]); main_splitter.setStretchFactor(1, 1)
@@ -189,6 +217,19 @@ class MainWindow(QMainWindow):
     def _connect_controller_signals(self):
         """连接 TopologyController 的信号到 MainWindow 的槽函数。"""
         try:
+            # 检查 controller 是否有效
+            # 使用 isinstance 检查更安全
+            if not isinstance(self.topology_controller, TopologyController):
+                 print("错误: TopologyController 实例无效，无法连接信号。")
+                 # 尝试重新获取类型，以防 fallback 被触发
+                 # 这种方式可能在复杂场景下不可靠
+                 try:
+                     from controllers.topology_controller import TopologyController as ActualController
+                     if not isinstance(self.topology_controller, ActualController):
+                          raise TypeError("self.topology_controller 不是有效的 TopologyController 实例。")
+                 except ImportError:
+                      raise TypeError("无法导入 ActualController 进行检查。")
+
             self.topology_controller.view_needs_update.connect(self._update_connection_views)
             self.topology_controller.request_device_details.connect(self._display_device_details_popup)
             self.topology_controller.request_ui_update.connect(self._full_ui_update_after_action)
@@ -306,12 +347,10 @@ class MainWindow(QMainWindow):
     def clear_results(self):
         """清除计算结果和连接，重置设备端口状态和画布状态。"""
         self.network_manager.clear_connections()
-        # !! 修改: 调用 Controller 重置状态 !!
+        # self.fig = None # fig 由 MplCanvas 管理
         self.topology_controller.reset_layout_state() # 会触发 view_needs_update
-        # 清空 UI 显示 (部分由 view_needs_update 触发的 _update_connection_views 处理)
         self.connections_textedit.clear(); self.connections_textedit.append("无连接。")
         self.manual_connection_list.clear()
-        # 更新按钮和 UI 状态
         self.export_list_button.setEnabled(False); self.export_topo_button.setEnabled(False); self.export_report_button.setEnabled(False)
         self.remove_manual_button.setEnabled(False); self._set_fill_buttons_enabled(False)
         self._update_device_table_connections(); self._update_port_totals_display(); self._update_manual_port_options()
@@ -338,11 +377,8 @@ class MainWindow(QMainWindow):
                 else: print(f"警告: 将计算出的连接 {dev1.name}[{port1}]<->{dev2.name}[{port2}] 添加到管理器时失败。")
             print(f"成功添加了 {added_count} 条计算出的连接到管理器。")
         else: print("计算未产生任何连接。")
-        # !! 修改: 调用 Controller 重置状态 !!
         self.topology_controller.reset_layout_state() # 会触发 view_needs_update
-        # 更新其他 UI
         self._update_device_table_connections(); self._update_device_combos(); self._update_manual_port_options()
-        # 更新按钮状态
         has_connections = bool(self.network_manager.get_all_connections())
         can_fill = has_connections or any(bool(dev.get_all_available_ports()) for dev in devices)
         self._set_fill_buttons_enabled(can_fill)
@@ -355,9 +391,7 @@ class MainWindow(QMainWindow):
         print("开始填充剩余连接 (Mesh)...")
         new_connections = self.network_manager.fill_connections_mesh()
         if new_connections:
-            # !! 修改: 调用 Controller 重置状态 !!
             self.topology_controller.reset_layout_state() # 会触发 view_needs_update
-            # 更新其他 UI
             self._update_device_table_connections(); self._update_manual_port_options(); self._update_port_totals_display()
             QMessageBox.information(self, "填充完成", f"成功添加了 {len(new_connections)} 条新 Mesh 连接。")
         else: QMessageBox.information(self, "填充完成", "没有找到更多可以建立的 Mesh 连接。")
@@ -370,9 +404,7 @@ class MainWindow(QMainWindow):
         print("开始填充剩余连接 (环形)...")
         new_connections = self.network_manager.fill_connections_ring()
         if new_connections:
-            # !! 修改: 调用 Controller 重置状态 !!
             self.topology_controller.reset_layout_state() # 会触发 view_needs_update
-            # 更新其他 UI
             self._update_device_table_connections(); self._update_manual_port_options(); self._update_port_totals_display()
             QMessageBox.information(self, "填充完成", f"成功添加了 {len(new_connections)} 条新环形连接段。")
         else: QMessageBox.information(self, "填充完成", "没有找到更多可以建立的环形连接段。")
@@ -402,17 +434,14 @@ class MainWindow(QMainWindow):
             self.device_tablewidget.setRowCount(0)
             for dev in self.network_manager.get_all_devices(): self._add_device_to_table(dev)
             self._update_device_combos()
-            # !! 修改: 调用 Controller 重置状态 !!
             self.topology_controller.reset_layout_state() # 会触发 view_needs_update
             self._update_port_totals_display()
-            # 更新按钮状态
             has_connections = bool(self.network_manager.get_all_connections())
             can_fill = has_connections or any(bool(dev.get_all_available_ports()) for dev in self.network_manager.get_all_devices())
             self._set_fill_buttons_enabled(can_fill)
             QMessageBox.information(self, "成功", f"项目配置已从以下文件加载:\n{filepath}")
         else:
             self.device_tablewidget.setRowCount(0); self._update_device_combos()
-            # !! 修改: 调用 Controller 重置状态 !!
             self.topology_controller.reset_layout_state() # 会触发 view_needs_update
             self._update_port_totals_display(); self._set_fill_buttons_enabled(False)
             QMessageBox.critical(self, "加载失败", f"无法加载项目配置文件:\n{filepath}")
@@ -427,7 +456,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def export_topology(self):
         """处理“导出拓扑图”按钮点击事件。"""
-        figure_to_export = self.mpl_canvas.fig
+        figure_to_export = self.mpl_canvas.fig # 从 MplCanvas 获取 fig 对象
         if not figure_to_export or not self.network_manager.get_all_devices(): QMessageBox.warning(self, "提示", "没有拓扑图可导出。"); return
         export_topology_to_file(self, figure_to_export)
 
@@ -435,7 +464,7 @@ class MainWindow(QMainWindow):
     def export_html_report(self):
         """处理“导出报告 (HTML)”按钮点击事件。"""
         devices = self.network_manager.get_all_devices(); connections = self.network_manager.get_all_connections()
-        figure_to_export = self.mpl_canvas.fig
+        figure_to_export = self.mpl_canvas.fig # 从 MplCanvas 获取 fig 对象
         if not devices or not figure_to_export: QMessageBox.warning(self, "无法导出", "请先添加设备并生成拓扑图。"); return
         export_report_to_html(self, figure_to_export, connections)
 
@@ -448,11 +477,8 @@ class MainWindow(QMainWindow):
         if dev1_id == dev2_id: QMessageBox.warning(self, "选择错误", "不能将设备连接到自身。"); return
         added_connection = self.network_manager.add_connection(dev1_id, port1_text, dev2_id, port2_text)
         if added_connection:
-            # !! 修改: 调用 Controller 重置状态 !!
             self.topology_controller.reset_layout_state() # 会触发 view_needs_update
-            # 更新其他 UI
             self._update_device_table_connections(); self._update_manual_port_options(); self._update_port_totals_display()
-            # 更新按钮状态
             self._set_fill_buttons_enabled(True)
             print(f"成功添加手动连接: {added_connection[0].name}[{port1_text}] <-> {added_connection[2].name}[{port2_text}]")
         else:
@@ -678,6 +704,7 @@ class MainWindow(QMainWindow):
 
     def _update_connection_views(self):
         """更新连接列表文本框、手动编辑列表和拓扑图。"""
+        print("DEBUG: _update_connection_views called") # 添加调试信息
         # 1. 更新连接列表文本框 (QTextEdit)
         self.connections_textedit.clear(); connections = self.network_manager.get_all_connections()
         if connections:
@@ -695,12 +722,16 @@ class MainWindow(QMainWindow):
         # !! 修改: 从 Controller 获取状态 !!
         current_node_positions = self.topology_controller.get_node_positions()
         current_selected_node_id = self.topology_controller.get_selected_node_id()
-        # !! 注意: 将 self.fig 存储起来 !!
-        self.fig, calculated_pos = self.mpl_canvas.plot_topology(devices_for_plot, connections_for_plot, layout_algorithm=selected_layout, fixed_pos=current_node_positions, selected_node_id=current_selected_node_id, port_totals_dict=port_totals)
+        print(f"DEBUG: Plotting with positions: {current_node_positions}") # 调试位置信息
+        print(f"DEBUG: Plotting with selected node: {current_selected_node_id}") # 调试选择信息
+        # !! 修改: 将 self.fig 存储起来 !!
+        figure, calculated_pos = self.mpl_canvas.plot_topology(devices_for_plot, connections_for_plot, layout_algorithm=selected_layout, fixed_pos=current_node_positions, selected_node_id=current_selected_node_id, port_totals_dict=port_totals)
+        if figure: self.fig = figure # 存储 Figure 引用
         # !! 修改: 如果布局重新计算，更新 Controller 的状态 !!
         if calculated_pos is not None and self.topology_controller.dragged_node_id is None:
             # 检查 Controller 的 node_positions 是否需要更新
             if self.topology_controller.node_positions is None or selected_layout != getattr(self, '_last_layout_used', None):
+                print(f"DEBUG: Updating controller positions due to new layout '{selected_layout}'") # 调试位置更新
                 self.topology_controller.node_positions = calculated_pos # 更新 Controller
                 setattr(self, '_last_layout_used', selected_layout)
         # 4. 更新导出按钮状态
@@ -747,4 +778,3 @@ class MainWindow(QMainWindow):
                       print(f"警告: Qt 字体 '{self.chinese_font.family()}' 未在 Matplotlib 字体列表中找到。")
          except Exception as e: print(f"获取 Matplotlib 字体属性时出错: {e}")
          return font_manager.FontProperties(family='sans-serif')
-
