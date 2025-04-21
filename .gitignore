@@ -10,3 +10,5 @@ ui/__pycache__/widgets.cpython-313.pyc
 utils/__pycache__/__init__.cpython-313.pyc
 utils/__pycache__/export_utils.cpython-313.pyc
 utils/__pycache__/misc_utils.cpython-313.pyc
+controllers/__pycache__/__init__.cpython-313.pyc
+controllers/__pycache__/topology_controller.cpython-313.pyc
