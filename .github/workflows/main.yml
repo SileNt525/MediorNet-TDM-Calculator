@@ -31,7 +31,7 @@ jobs:
           pip install pyinstaller
       - name: Run PyInstaller (Windows One-File)
         run: |
-          pyinstaller TDMC.py `
+          pyinstaller main.py `
             --name MediorNetCalculator `
             --onefile `
             --windowed
@@ -58,7 +58,7 @@ jobs:
           pip install pyinstaller
       - name: Run PyInstaller (macOS arm64 One-File)
         run: |
-          pyinstaller TDMC.py \
+          pyinstaller main.py \
             --name MediorNetCalculator \
             --onefile \
             --windowed
