@@ -1,0 +1,12 @@
+.DS_Store
+.vscode/settings.json
+core/__pycache__/__init__.cpython-313.pyc
+core/__pycache__/device.cpython-313.pyc
+core/__pycache__/network_manager.cpython-313.pyc
+ui/__pycache__/__init__.cpython-313.pyc
+ui/__pycache__/main_window.cpython-313.pyc
+ui/__pycache__/topology_canvas.cpython-313.pyc
+ui/__pycache__/widgets.cpython-313.pyc
+utils/__pycache__/__init__.cpython-313.pyc
+utils/__pycache__/export_utils.cpython-313.pyc
+utils/__pycache__/misc_utils.cpython-313.pyc
