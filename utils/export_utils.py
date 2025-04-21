@@ -246,7 +246,7 @@ def export_report_to_html(parent_window: 'QWidget', figure: Optional['Figure'], 
     </style>
 </head>
 <body class="bg-gray-100">
-    <div class="container mx-auto p-6 md:p-10 bg-white rounded-lg shadow-xl my-10 max-w-6xl"> {{/* 稍微加宽容器 */}}
+    <div class="container mx-auto p-6 md:p-10 bg-white rounded-lg shadow-xl my-10 max-w-6xl">
         <h1 class="text-2xl font-bold text-center mb-8 text-gray-700">MediorNet TDM 连接报告</h1>
 
         <div class="mb-8">
