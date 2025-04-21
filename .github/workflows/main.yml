@@ -2,16 +2,16 @@
 
 name: Build Windows & macOS Executables & Release
 
-# 控制工作流触发的时机
+# Controls when the workflow will run
 on:
   push:
     tags:
-      - 'v*' # 当创建 v 开头的标签时触发 (用于发布 Release)
-  workflow_dispatch:      # 允许手动从 GitHub Actions 页面触发
+      - 'v*' # Trigger on creating tags starting with v (for releases)
+  workflow_dispatch: # Allow manual trigger from GitHub Actions page
 
-# --- V44: 添加权限以创建 Release ---
+# Permissions needed to create releases and upload assets
 permissions:
-  contents: write # 需要此权限来创建 Release 和上传附件
+  contents: write
 
 jobs:
   build-windows:
@@ -20,94 +20,131 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.11' # Or your target Python version
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) { pip install -r requirements.txt } else { Write-Host "requirements.txt not found." }
+          # Install project dependencies (assuming requirements.txt exists)
+          if (Test-Path requirements.txt) {
+            pip install -r requirements.txt
+            Write-Host "Installed dependencies from requirements.txt"
+          } else {
+            # Install specific dependencies if no requirements.txt
+            # Make sure to list all needed packages here
+            pip install PySide6 networkx matplotlib
+            Write-Host "requirements.txt not found. Installed core dependencies."
+          }
+          # Install PyInstaller
           pip install pyinstaller
+        shell: pwsh # Use PowerShell for consistency on Windows
+
       - name: Run PyInstaller (Windows One-File)
         run: |
           pyinstaller main.py `
             --name MediorNetCalculator `
             --onefile `
-            --windowed
+            --windowed `
+            --paths . `                     # <-- Added: Tell PyInstaller to search for modules in the current directory
+            --add-data "assets;assets"      # <-- Added: Bundle the assets folder (Windows separator is ;)
+        shell: pwsh
+
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediorNetCalculator-Windows-exe # 注意这个名称，下载时会用到
+          name: MediorNetCalculator-Windows-exe
           path: dist/MediorNetCalculator.exe
 
   build-macos-arm64:
     name: Build for macOS (Apple Silicon arm64)
-    runs-on: macos-14
+    runs-on: macos-14 # Runner with arm64 support
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.11' # Or your target Python version
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; else echo "requirements.txt not found."; fi
+          # Install project dependencies (assuming requirements.txt exists)
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+            echo "Installed dependencies from requirements.txt"
+          else
+            # Install specific dependencies if no requirements.txt
+            pip install PySide6 networkx matplotlib
+            echo "requirements.txt not found. Installed core dependencies."
+          fi
+          # Install PyInstaller
           pip install pyinstaller
+
       - name: Run PyInstaller (macOS arm64 One-File)
         run: |
           pyinstaller main.py \
             --name MediorNetCalculator \
             --onefile \
-            --windowed
+            --windowed \
+            --paths . \                     # <-- Added: Tell PyInstaller to search for modules in the current directory
+            --add-data "assets:assets"      # <-- Added: Bundle the assets folder (macOS/Linux separator is :)
+
       - name: Zip .app bundle (arm64)
-        run: ditto -c -k --sequesterRsrc --keepParent dist/MediorNetCalculator.app dist/MediorNetCalculator-macOS-arm64.zip
+        # Ensure the .app bundle exists before zipping
+        run: |
+          if [ -d "dist/MediorNetCalculator.app" ]; then
+            ditto -c -k --sequesterRsrc --keepParent dist/MediorNetCalculator.app dist/MediorNetCalculator-macOS-arm64.zip
+            echo "Zipped .app bundle."
+          else
+            echo "Error: dist/MediorNetCalculator.app not found!"
+            # Optionally check for the raw executable if .app creation failed
+            if [ -f "dist/MediorNetCalculator" ]; then
+              echo "Found raw executable, zipping that instead (app creation might have failed)."
+              zip dist/MediorNetCalculator-macOS-arm64.zip dist/MediorNetCalculator
+            else
+              exit 1
+            fi
+          fi
+
       - name: Upload macOS arm64 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediorNetCalculator-macOS-arm64-app-zip # 注意这个名称
+          name: MediorNetCalculator-macOS-arm64-app-zip
           path: dist/MediorNetCalculator-macOS-arm64.zip
 
-  # --- 新增：Release Job ---
+  # Release Job (No changes needed here, but verify paths in 'files')
   release:
     name: Create GitHub Release
-    # 仅当推送 v 开头的 tag 时运行
     if: startsWith(github.ref, 'refs/tags/v')
-    # 需要等待所有 build job 成功完成
-    needs: [build-windows, build-macos-arm64]
-    runs-on: ubuntu-latest # Release 创建本身不依赖特定 OS
+    needs: [build-windows, build-macos-arm64] # Depends on successful builds
+    runs-on: ubuntu-latest
 
     steps:
-      # 可选：签出代码，如果 Release Notes 需要引用代码或提交信息
-      # - name: Checkout code
-      #   uses: actions/checkout@v4
-
-      # 下载所有 build job 生成的 artifacts 到一个名为 'release-assets' 的目录
+      # Download all artifacts produced by build jobs
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-assets # 指定下载路径
+          path: release-assets # Download to this directory
 
-      # 列出下载的文件以供调试（可选）
+      # List downloaded files for debugging (optional)
       - name: List downloaded files
         run: ls -R release-assets
 
-      # 使用 softprops/action-gh-release 创建 Release 并上传文件
-      # 它会自动使用 tag 名称作为 Release 名称
+      # Create Release and upload assets
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          # 指定要上传的文件，使用通配符匹配下载目录中的所有内容
-          # download-artifact@v4 会将每个 artifact 放入其名称对应的子目录中
+          # Files to upload - adjust paths based on artifact names and downloaded structure
           files: |
             release-assets/MediorNetCalculator-Windows-exe/MediorNetCalculator.exe
-            release-assets/MediorNetCalculator-macOS-x64-app-zip/MediorNetCalculator-macOS-x64.zip
             release-assets/MediorNetCalculator-macOS-arm64-app-zip/MediorNetCalculator-macOS-arm64.zip
-          # 可选：自动生成 Release Notes
+          # Optional: Auto-generate release notes from commits/tags
           # generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 必须，用于认证
-  # --- 结束 Release Job ---
-
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for authentication
