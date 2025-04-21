@@ -147,13 +147,18 @@ class MainWindow(QMainWindow):
             if os.path.exists(font_path):
                 font_id = QFontDatabase.addApplicationFont(font_path)
                 if font_id != -1:
-                    family = QFontDatabase.applicationFontFamilies(font_id)[0]
-                    print(f"成功加载并设置字体: {family} (路径: {font_path})")
-                    # 设置 Matplotlib 字体
-                    font_manager.fontManager.addfont(font_path)
-                    plt.rcParams['font.sans-serif'] = [family] + plt.rcParams.get('font.sans-serif', [])
-                    plt.rcParams['axes.unicode_minus'] = False
-                    return QFont(family, 10)
+                    families = QFontDatabase.applicationFontFamilies(font_id)
+                    if families:
+                        family = families[0]
+                        print(f"成功加载并设置字体: {family} (路径: {font_path})")
+                        # 设置 Matplotlib 字体
+                        font_manager.fontManager.addfont(font_path)
+                        plt.rcParams['font.sans-serif'] = [family] + plt.rcParams.get('font.sans-serif', [])
+                        plt.rcParams['axes.unicode_minus'] = False
+                        return QFont(family, 10)
+                    else:
+                        print(f"警告: 无法从字体文件获取 family name {font_path}")
+
                 else:
                     print(f"警告: 添加字体失败 {font_path}")
             else:
@@ -1433,13 +1438,12 @@ class MainWindow(QMainWindow):
                       # 如果 Qt 加载了但 Matplotlib 没找到，尝试添加路径
                       # 注意：QFontDatabase 可能需要 QApplication 实例存在
                       db = QFontDatabase()
-                      font_paths = db.applicationFontFiles(db.families().index(self.chinese_font.family()))
-                      # font_path = QFontDatabase.applicationFontFiles(QFontDatabase.families().indexOf(self.chinese_font.family()))
-                      if font_paths:
-                           font_manager.fontManager.addfont(font_paths[0])
-                           # 再次检查
-                           if self.chinese_font.family() in [f.name for f in font_manager.fontManager.ttflist]:
-                                return font_manager.FontProperties(family=self.chinese_font.family())
+                      # 查找字体家族对应的文件路径
+                      # 注意：QFontDatabase.applicationFontFiles 可能需要 font ID 而不是 family name
+                      # 这是一个复杂的问题，取决于字体如何被 Qt 注册
+                      # 简化处理：如果 Matplotlib 找不到，就用默认
+                      print(f"警告: Qt 字体 '{self.chinese_font.family()}' 未在 Matplotlib 字体列表中找到。")
+
          except Exception as e:
               print(f"获取 Matplotlib 字体属性时出错: {e}")
          # 回退到默认 sans-serif
@@ -1483,7 +1487,7 @@ class MainWindow(QMainWindow):
     def _start_node_drag(self, node_id: int, event_xdata: float, event_ydata: float):
         """辅助函数：开始节点拖动。"""
         # 确认节点位置信息存在
-        if node_id not in self.node_positions:
+        if self.node_positions is None or node_id not in self.node_positions:
             print(f"警告: 尝试拖动未找到位置的节点 ID {node_id}")
             return
 
@@ -1505,7 +1509,7 @@ class MainWindow(QMainWindow):
     def _start_connection_drag(self, node_id: int):
         """辅助函数：开始连接拖动 (Shift+Click)。"""
         # 确认节点位置信息存在
-        if node_id not in self.node_positions:
+        if self.node_positions is None or node_id not in self.node_positions:
              print(f"警告: 尝试从未知位置的节点 ID {node_id} 开始连接拖动")
              return
 
@@ -1575,50 +1579,32 @@ class MainWindow(QMainWindow):
 
         # 检查目标节点是否有效且不是起始节点本身
         if target_node_id is not None and target_node_id != start_node_id:
-            # 尝试使用 NetworkManager 自动寻找最佳端口并添加连接
+            # **修复: 调用 NetworkManager 的 add_best_connection 方法**
             print(f"尝试通过拖拽连接: ID {start_node_id} -> ID {target_node_id}")
+            added_connection = self.network_manager.add_best_connection(start_node_id, target_node_id)
 
-            # 让 NetworkManager 处理寻找最佳连接并添加的逻辑
-            # 这里假设 NetworkManager 有一个类似的方法，或者我们调用现有的方法
-            # 简化：我们直接调用 add_connection，让它内部处理端口查找和验证
-            # 注意：V48 的 _find_best_single_link 会修改副本状态，不适合直接用
-            # 我们需要一种方式来“尝试”添加最佳连接
-
-            # 方案：调用 NetworkManager 的一个新方法（如果存在）
-            # added_connection = self.network_manager.add_best_connection(start_node_id, target_node_id)
-
-            # 临时方案：模拟调用 add_connection，但需要先找到可用端口
-            # 这部分逻辑最好封装在 NetworkManager 中
-            dev1 = self.network_manager.get_device_by_id(start_node_id)
-            dev2 = self.network_manager.get_device_by_id(target_node_id)
-            if dev1 and dev2:
-                 # 探测最佳端口 (需要 NetworkManager 提供类似 _find_best_single_link 但不修改状态的方法)
-                 # 暂时无法直接实现，需要 NetworkManager 支持
-                 # 这里我们先假设调用 add_connection 会失败，除非手动编辑标签页选好端口
-                 # 或者，我们可以在这里调用 add_manual_connection，但需要找到端口
-                 # 简化处理：提示用户使用手动编辑
-                 QMessageBox.information(self, "提示", f"拖拽连接功能需要 NetworkManager 支持自动端口选择。\n请使用“手动编辑”标签页在 {dev1.name} 和 {dev2.name} 之间添加连接。")
-
-                 # --- 如果 NetworkManager 支持 add_best_connection ---
-                 # added_connection = self.network_manager.add_best_connection(start_node_id, target_node_id)
-                 # if added_connection:
-                 #      # 连接成功，更新 UI
-                 #      self.node_positions = None # 重置布局
-                 #      self.selected_node_id = None # 清除选择
-                 #      self._update_connection_views()
-                 #      self._update_device_table_connections()
-                 #      self._update_manual_port_options()
-                 #      self._update_port_totals_display()
-                 #      # 更新填充按钮状态
-                 #      self.fill_mesh_button.setEnabled(True)
-                 #      self.fill_ring_button.setEnabled(True)
-                 #      print(f"成功通过拖拽添加连接: {added_connection[0].name}[{added_connection[1]}] <-> {added_connection[2].name}[{added_connection[3]}]")
-                 # else:
-                 #      QMessageBox.warning(self, "连接失败", f"无法在 {dev1.name} 和 {dev2.name} 之间自动添加连接（可能无可用兼容端口）。")
-                 #      self._update_manual_port_options() # 刷新端口列表
-                 # ----------------------------------------------------
+            if added_connection:
+                 # 连接成功，更新 UI
+                 self.node_positions = None # 重置布局，让 NetworkX 重新计算
+                 self.selected_node_id = None # 清除选择
+                 self._update_connection_views()
+                 self._update_device_table_connections()
+                 self._update_manual_port_options()
+                 self._update_port_totals_display()
+                 # 更新填充按钮状态
+                 has_connections = bool(self.network_manager.get_all_connections())
+                 can_fill = has_connections or any(bool(dev.get_all_available_ports()) for dev in self.network_manager.get_all_devices())
+                 self.fill_mesh_button.setEnabled(can_fill)
+                 self.fill_ring_button.setEnabled(can_fill)
+                 print(f"成功通过拖拽添加连接: {added_connection[0].name}[{added_connection[1]}] <-> {added_connection[2].name}[{added_connection[3]}]")
             else:
-                 print("错误: 找不到拖放连接的设备对象。")
+                 # 连接失败 (NetworkManager 内部已打印原因)
+                 dev1 = self.network_manager.get_device_by_id(start_node_id)
+                 dev2 = self.network_manager.get_device_by_id(target_node_id)
+                 dev1_name = dev1.name if dev1 else f"ID {start_node_id}"
+                 dev2_name = dev2.name if dev2 else f"ID {target_node_id}"
+                 QMessageBox.warning(self, "连接失败", f"无法在 {dev1_name} 和 {dev2_name} 之间自动添加连接（可能无可用兼容端口）。")
+                 self._update_manual_port_options() # 刷新端口列表
         else:
             # 目标无效或与起始节点相同
             print("连接拖动取消或目标无效/相同。")

@@ -188,6 +188,7 @@ class NetworkManager:
     def add_connection(self, dev1_id: int, port1_name: str, dev2_id: int, port2_name: str) -> Optional[ConnectionType]:
         """
         在两个设备之间添加一条手动连接。
+        这个方法会进行端口有效性、可用性、兼容性检查，并更新设备状态和图。
 
         Args:
             dev1_id (int): 设备 1 的 ID。
@@ -245,6 +246,50 @@ class NetworkManager:
         else:
             print(f"错误: 占用端口 {dev1.name}[{port1_name}] 失败。")
             return None
+
+    # --- 新增方法: 用于拖拽连接 ---
+    def add_best_connection(self, dev1_id: int, dev2_id: int) -> Optional[ConnectionType]:
+        """
+        尝试在两个设备之间自动寻找最高优先级的可用兼容端口并建立连接。
+        用于实现拖拽连接功能。
+
+        Args:
+            dev1_id (int): 设备 1 的 ID。
+            dev2_id (int): 设备 2 的 ID。
+
+        Returns:
+            Optional[ConnectionType]: 如果成功找到端口并添加连接，返回连接元组；否则返回 None。
+        """
+        dev1 = self.get_device_by_id(dev1_id)
+        dev2 = self.get_device_by_id(dev2_id)
+
+        if not dev1 or not dev2:
+            print(f"错误: 添加最佳连接时找不到设备 ID {dev1_id} 或 {dev2_id}。")
+            return None
+        if dev1_id == dev2_id:
+             print(f"错误: 不能将设备 {dev1.name} 连接到自身。")
+             return None
+
+        # 1. 使用副本探测最佳端口
+        dev1_copy = copy.deepcopy(dev1)
+        dev2_copy = copy.deepcopy(dev2)
+        port1_probe, port2_probe, conn_type_probe = self._find_best_single_link(dev1_copy, dev2_copy)
+
+        # 2. 如果找到端口，尝试在真实设备上添加连接
+        if port1_probe and port2_probe:
+            # 确定探测结果对应的原始设备端口
+            actual_port1_name = port1_probe if dev1_copy.id == dev1_id else port2_probe
+            actual_port2_name = port2_probe if dev1_copy.id == dev1_id else port1_probe
+
+            print(f"探测到最佳可用端口: {dev1.name}[{actual_port1_name}] <-> {dev2.name}[{actual_port2_name}]")
+
+            # 调用现有的 add_connection 方法来实际添加并处理状态更新/验证
+            added_connection = self.add_connection(dev1_id, actual_port1_name, dev2_id, actual_port2_name)
+            return added_connection # 返回 add_connection 的结果 (成功则为连接元组，失败为 None)
+        else:
+            print(f"在 {dev1.name} 和 {dev2.name} 之间未探测到可用兼容端口。")
+            return None
+    # --- 结束新增方法 ---
 
     def remove_connection(self, dev1_id: int, port1_name: str, dev2_id: int, port2_name: str) -> bool:
         """
