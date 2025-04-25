@@ -44,7 +44,7 @@ class TopologyController(QObject):
         初始化 TopologyController。
 
         Args:
-            main_window ('MainWindow'): 主窗口实例的引用 (使用字符串类型提示)。
+            main_window ('MainWindow'): 主窗口实例的引用 (主要用于信号连接，尽量减少直接调用)。
             network_manager ('NetworkManager'): 网络管理器实例的引用。
             mpl_canvas ('MplCanvas'): Matplotlib 画布实例的引用。
             parent (Optional[QObject]): 父对象 (通常为 None 或 main_window)。
@@ -136,7 +136,6 @@ class TopologyController(QObject):
         """辅助函数：结束节点拖动。"""
         if self.dragged_node_id is not None:
             print(f"结束拖动节点: ID={self.dragged_node_id}")
-            # 不需要同步回 MainWindow，MainWindow 会通过 getter 获取
             self.dragged_node_id = None
         else: print("调试: _end_node_drag 被调用但 self.dragged_node_id 为 None")
 
@@ -152,29 +151,32 @@ class TopologyController(QObject):
 
         target_node_id = self._get_node_at_event(event)
         if target_node_id is not None and target_node_id != start_node_id:
-            print(f"尝试通过拖拽连接: ID {start_node_id} -> ID {target_node_id}")
+            print(f"尝试通过拖拽连接: ID {start_node_id} -> ID {target_node_id}") # Log attempt
             added_connection = self.network_manager.add_best_connection(start_node_id, target_node_id)
             if added_connection:
                  self.node_positions = None; self.selected_node_id = None
-                 print(f"成功通过拖拽添加连接: {added_connection[0].name}[{added_connection[1]}] <-> {added_connection[2].name}[{added_connection[3]}]")
-                 self.request_ui_update.emit() # 发射信号
+                 print(f"成功通过拖拽添加连接: {added_connection[0].name}[{added_connection[1]}] <-> {added_connection[2].name}[{added_connection[3]}]") # Log success
+                 self.request_ui_update.emit()
                  has_connections = bool(self.network_manager.get_all_connections())
                  can_fill = has_connections or any(bool(dev.get_all_available_ports()) for dev in self.network_manager.get_all_devices())
-                 self.enable_fill_buttons.emit(can_fill) # 发射信号
+                 self.enable_fill_buttons.emit(can_fill)
             else:
                  dev1 = self.network_manager.get_device_by_id(start_node_id); dev2 = self.network_manager.get_device_by_id(target_node_id)
                  dev1_name = dev1.name if dev1 else f"ID {start_node_id}"; dev2_name = dev2.name if dev2 else f"ID {target_node_id}"
-                 self.connection_attempt_failed.emit(dev1_name, dev2_name) # 发射信号
-                 self.request_ui_update.emit() # 发射信号 (更新端口)
+                 print(f"拖拽连接失败: {dev1_name} <-> {dev2_name}") # Log failure
+                 self.connection_attempt_failed.emit(dev1_name, dev2_name)
+                 self.request_ui_update.emit()
         else:
-            print("连接拖动取消或目标无效/相同。")
-            self.view_needs_update.emit() # 确保清除选择状态
+            print("连接拖动取消或目标无效/相同。") # Log cancellation
+            self.view_needs_update.emit()
 
 
     # --- 作为槽函数连接到 MplCanvas 信号 ---
     @Slot(object)
     def on_canvas_press(self, event):
         """处理画布上的鼠标按下事件。"""
+        # !! 添加调试 Print !!
+        print(f"DEBUG: on_canvas_press triggered: button={event.button}, xdata={event.xdata}, ydata={event.ydata}, dblclick={event.dblclick}")
         if self.connection_line:
             try: self.connection_line.remove(); self.connection_line = None
             except ValueError: pass
@@ -184,12 +186,13 @@ class TopologyController(QObject):
         clicked_node_id = self._get_node_at_event(event)
         modifiers = QGuiApplication.keyboardModifiers()
         is_shift_pressed = modifiers == Qt.KeyboardModifier.ShiftModifier
+        print(f"DEBUG: Shift pressed: {is_shift_pressed}, Clicked node: {clicked_node_id}") # 调试 Shift 和点击
 
         if event.dblclick:
             self.dragged_node_id = None; self.connecting_node_id = None
             if clicked_node_id is not None:
                 device = self.network_manager.get_device_by_id(clicked_node_id)
-                if device: self.request_device_details.emit(device) # 发射信号
+                if device: self.request_device_details.emit(device)
         elif event.button == 1:
             if clicked_node_id is not None:
                 if is_shift_pressed: self._start_connection_drag(clicked_node_id)
@@ -199,6 +202,8 @@ class TopologyController(QObject):
     @Slot(object)
     def on_canvas_motion(self, event):
         """处理画布上的鼠标移动事件。"""
+        # !! 添加调试 Print (可选，可能输出过多) !!
+        # print(f"DEBUG: on_canvas_motion triggered: xdata={event.xdata}, ydata={event.ydata}, button={event.button}")
         if event.inaxes != self.mpl_canvas.axes or event.xdata is None or event.ydata is None: return
         x, y = event.xdata, event.ydata
 
@@ -206,7 +211,7 @@ class TopologyController(QObject):
             if self.dragged_node_id in self.node_positions:
                  new_x = x - self.drag_offset[0]; new_y = y - self.drag_offset[1]
                  self.node_positions[self.dragged_node_id] = (new_x, new_y)
-                 self.view_needs_update.emit() # 发射信号
+                 self.view_needs_update.emit()
             else: print(f"警告: 尝试拖动节点 {self.dragged_node_id} 但其不在 node_positions 中"); self.dragged_node_id = None
         elif self.connecting_node_id is not None and event.button == 1 and self.node_positions:
             start_pos = self.node_positions.get(self.connecting_node_id)
@@ -223,6 +228,8 @@ class TopologyController(QObject):
     @Slot(object)
     def on_canvas_release(self, event):
         """处理画布上的鼠标释放事件。"""
+        # !! 添加调试 Print !!
+        print(f"DEBUG: on_canvas_release triggered: button={event.button}, xdata={event.xdata}, ydata={event.ydata}")
         if event.button == 1:
             if self.dragged_node_id is not None: self._end_node_drag()
             elif self.connecting_node_id is not None: self._end_connection_drag(event)
