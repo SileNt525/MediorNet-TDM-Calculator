@@ -99,7 +99,7 @@ class Ui_MainWindow(object):
         add_group_layout.addWidget(MainWindow.mpo_label, 3, 0)
         MainWindow.mpo_entry = QLineEdit("2")
         MainWindow.mpo_entry.setFont(chinese_font) # !! 使用局部变量 !!
-        add_group_layout.addWidget(MainWindow.mpo_entry, 3, 1)a
+        add_group_layout.addWidget(MainWindow.mpo_entry, 3, 1)
 
         MainWindow.lc_label = QLabel(f"{PORT_LC} 端口:")
         add_group_layout.addWidget(MainWindow.lc_label, 4, 0)
