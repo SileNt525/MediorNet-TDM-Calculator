@@ -109,7 +109,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MediorNetCalculator-macOS-arm64-app-zip # Ensure this matches the release job
-          name: MediorNetCalculator-macOS-arm64-app-zip # Ensure this matches the release job
           path: dist/MediorNetCalculator-macOS-arm64.zip
 
   # Release Job (Verify paths in 'files' match artifact names)
