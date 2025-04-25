@@ -51,7 +51,7 @@ jobs:
             --windowed `
             --paths . `                     # Find modules in the root directory
             --add-data "assets;assets" `    # Bundle assets folder (Windows separator ;)
-            --icon="assets/tdmc.ico"        # Correct icon path
+            --icon assets/tdmc.ico          # <-- Changed: Use space instead of =
         shell: pwsh
 
       - name: Upload Windows Artifact
@@ -95,7 +95,7 @@ jobs:
             --windowed \
             --paths . \                     # Find modules in the root directory
             --add-data "assets:assets" \    # Bundle assets folder (macOS separator :)
-            --icon="assets/tdmc.ico"        # Add icon for macOS app bundle
+            --icon assets/tdmc.ico          # <-- Changed: Use space instead of =
 
       - name: Zip .app bundle (arm64)
         # Ensure the .app bundle exists before zipping
