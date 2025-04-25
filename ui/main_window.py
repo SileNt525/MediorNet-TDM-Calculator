@@ -96,7 +96,7 @@ class MainWindow(QMainWindow):
     """应用程序的主窗口，包含所有 UI 元素和交互逻辑。"""
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MediorNet TDM 连接计算器 V1.4 (UI Separated)")
+        self.setWindowTitle("MediorNet TDM 连接计算器 v1.2 -- By Vega Sun")
         self.setGeometry(100, 100, 1100, 800)
 
         # --- 核心数据管理器 ---
