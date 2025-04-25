@@ -93,11 +93,13 @@ jobs:
             echo "Zipped .app bundle."
           else
             echo "Error: dist/MediorNetCalculator.app not found! Checking for raw executable..."
+            echo "Error: dist/MediorNetCalculator.app not found! Checking for raw executable..."
             # Optionally check for the raw executable if .app creation failed
             if [ -f "dist/MediorNetCalculator" ]; then
               echo "Found raw executable, zipping that instead (app creation might have failed)."
               zip dist/MediorNetCalculator-macOS-arm64.zip dist/MediorNetCalculator
             else
+              echo "Error: Neither .app nor raw executable found in dist/ directory."
               echo "Error: Neither .app nor raw executable found in dist/ directory."
               exit 1
             fi
@@ -107,8 +109,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MediorNetCalculator-macOS-arm64-app-zip # Ensure this matches the release job
+          name: MediorNetCalculator-macOS-arm64-app-zip # Ensure this matches the release job
           path: dist/MediorNetCalculator-macOS-arm64.zip
 
+  # Release Job (Verify paths in 'files' match artifact names)
   # Release Job (Verify paths in 'files' match artifact names)
   release:
     name: Create GitHub Release
@@ -131,6 +135,8 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
+          # Files to upload - Paths are relative to runner workspace after download
+          # Format: <download-path>/<artifact-name>/<file-in-artifact>
           # Files to upload - Paths are relative to runner workspace after download
           # Format: <download-path>/<artifact-name>/<file-in-artifact>
           files: |
