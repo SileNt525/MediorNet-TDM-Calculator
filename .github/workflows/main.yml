@@ -49,9 +49,9 @@ jobs:
             --name MediorNetCalculator `
             --onefile `
             --windowed `
-            --paths . `                     # <-- Added: Tell PyInstaller to search for modules in the current directory
-            --add-data "./utils/assets:assets"      # <-- Added: Bundle the assets folder (Windows separator is ;)
-            --icon=./utils/assets/tdmc.ico
+            --paths . `                     # Find modules in the root directory
+            --add-data "assets;assets" `    # Bundle assets folder (Windows separator ;)
+            --icon="assets/tdmc.ico"        # Correct icon path
         shell: pwsh
 
       - name: Upload Windows Artifact
@@ -93,8 +93,9 @@ jobs:
             --name MediorNetCalculator \
             --onefile \
             --windowed \
-            --paths . \                     # <-- Added: Tell PyInstaller to search for modules in the current directory
-            --add-data "./utils/assets:assets"      # <-- Added: Bundle the assets folder (macOS/Linux separator is :)
+            --paths . \                     # Find modules in the root directory
+            --add-data "assets:assets" \    # Bundle assets folder (macOS separator :)
+            --icon="assets/tdmc.ico"        # Add icon for macOS app bundle
 
       - name: Zip .app bundle (arm64)
         # Ensure the .app bundle exists before zipping
@@ -103,12 +104,13 @@ jobs:
             ditto -c -k --sequesterRsrc --keepParent dist/MediorNetCalculator.app dist/MediorNetCalculator-macOS-arm64.zip
             echo "Zipped .app bundle."
           else
-            echo "Error: dist/MediorNetCalculator.app not found!"
+            echo "Error: dist/MediorNetCalculator.app not found! Checking for raw executable..."
             # Optionally check for the raw executable if .app creation failed
             if [ -f "dist/MediorNetCalculator" ]; then
               echo "Found raw executable, zipping that instead (app creation might have failed)."
               zip dist/MediorNetCalculator-macOS-arm64.zip dist/MediorNetCalculator
             else
+              echo "Error: Neither .app nor raw executable found in dist/ directory."
               exit 1
             fi
           fi
@@ -116,10 +118,10 @@ jobs:
       - name: Upload macOS arm64 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediorNetCalculator-macOS-arm64-app-zip
+          name: MediorNetCalculator-macOS-arm64-app-zip # Ensure this matches the release job
           path: dist/MediorNetCalculator-macOS-arm64.zip
 
-  # Release Job (No changes needed here, but verify paths in 'files')
+  # Release Job (Verify paths in 'files' match artifact names)
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -141,7 +143,8 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          # Files to upload - adjust paths based on artifact names and downloaded structure
+          # Files to upload - Paths are relative to runner workspace after download
+          # Format: <download-path>/<artifact-name>/<file-in-artifact>
           files: |
             release-assets/MediorNetCalculator-Windows-exe/MediorNetCalculator.exe
             release-assets/MediorNetCalculator-macOS-arm64-app-zip/MediorNetCalculator-macOS-arm64.zip
